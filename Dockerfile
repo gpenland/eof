@@ -8,7 +8,9 @@ RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && r
 COPY src ./src
 COPY migrations ./migrations
 COPY web ./web
-RUN cargo build --release
+# COPY keeps the files' original (older) mtimes, so without the touch Cargo may treat the
+# placeholder binary from the cache step as fresh and ship an empty `fn main() {}`.
+RUN touch src/main.rs && cargo build --release && test "$(stat -c%s target/release/eof)" -gt 1000000
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=build /src/target/release/eof /eof
