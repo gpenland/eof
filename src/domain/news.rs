@@ -21,6 +21,7 @@ pub struct Issue {
     pub read_at: Option<DateTime<Utc>>,
     pub created_by: String,
     pub published_at: DateTime<Utc>,
+    pub emailed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -183,6 +184,28 @@ pub async fn set_read(db: &PgPool, edition: NaiveDate, read: bool) -> AppResult<
         return Err(AppError::NotFound("issue"));
     }
     Ok(())
+}
+
+/// Atomically mark an edition as emailed if it hasn't been yet; `None` means someone already did.
+pub async fn claim_email(db: &PgPool, edition: NaiveDate) -> AppResult<Option<Issue>> {
+    Ok(sqlx::query_as("UPDATE issues SET emailed_at = now() WHERE edition = $1 AND emailed_at IS NULL RETURNING *")
+        .bind(edition)
+        .fetch_optional(db)
+        .await?)
+}
+
+/// Undo a claim after a failed send so a manual send (or retry) isn't blocked.
+pub async fn release_email(db: &PgPool, edition: NaiveDate) -> AppResult<()> {
+    sqlx::query("UPDATE issues SET emailed_at = NULL WHERE edition = $1").bind(edition).execute(db).await?;
+    Ok(())
+}
+
+pub async fn mark_emailed(db: &PgPool, edition: NaiveDate) -> AppResult<Issue> {
+    sqlx::query_as("UPDATE issues SET emailed_at = now() WHERE edition = $1 RETURNING *")
+        .bind(edition)
+        .fetch_optional(db)
+        .await?
+        .ok_or(AppError::NotFound("issue"))
 }
 
 pub async fn delete(db: &PgPool, edition: NaiveDate) -> AppResult<Issue> {

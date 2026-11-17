@@ -46,6 +46,7 @@ pub fn router() -> Router<AppState> {
         .route("/issues", get(list_issues).post(publish_issue))
         .route("/issues/{which}", get(get_issue).delete(delete_issue))
         .route("/issues/{edition}/read", put(set_read))
+        .route("/issues/{edition}/email", post(email_issue))
         .route("/passkeys", get(auth::list_passkeys))
         .route("/passkeys/{id}", patch(auth::rename_passkey).delete(auth::delete_passkey))
         .route("/sessions", get(auth::list_sessions))
@@ -223,6 +224,10 @@ fn edition(s: &str) -> AppResult<NaiveDate> {
 async fn set_read(State(st): State<AppState>, _o: Owner, Path(ed): Path<String>, Json(b): Json<ReadBody>) -> J {
     actions::set_issue_read(&st, &Actor::you(), edition(&ed)?, b.read).await?;
     ok()
+}
+
+async fn email_issue(State(st): State<AppState>, _o: Owner, Path(ed): Path<String>) -> J {
+    Ok(Json(json!(actions::email_issue(&st, &Actor::you(), edition(&ed)?).await?)))
 }
 
 async fn delete_issue(State(st): State<AppState>, _o: Owner, Path(ed): Path<String>) -> J {

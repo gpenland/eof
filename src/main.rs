@@ -9,6 +9,7 @@ mod api;
 mod auth;
 mod config;
 mod domain;
+mod email;
 mod error;
 mod events;
 mod mcp;
@@ -42,6 +43,9 @@ async fn main() -> anyhow::Result<()> {
     domain::tasks::ensure_default_list(&db).await?;
 
     let state = state::AppState::new(cfg.clone(), db).await?;
+    if let Some(e) = &cfg.email {
+        tracing::info!("news email on: editions go to {} when published", e.to);
+    }
     auth::announce_setup(&state).await?;
     state::spawn_janitor(state.clone());
 

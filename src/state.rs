@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use tokio::sync::broadcast;
 use webauthn_rs::prelude::*;
 
-use crate::{config::Config, events::Event, security::RateLimiter};
+use crate::{config::Config, email::Mailer, events::Event, security::RateLimiter};
 
 /// An in-flight WebAuthn ceremony. Kept server-side (never round-tripped through the client)
 /// so a challenge can only be answered once.
@@ -29,6 +29,8 @@ pub struct Inner {
     pub limiter: RateLimiter,
     /// First-run setup code; `None` once a passkey exists.
     pub setup_code: Mutex<Option<String>>,
+    /// `None` when email isn't configured.
+    pub mailer: Option<Mailer>,
 }
 
 impl std::ops::Deref for AppState {
@@ -46,6 +48,7 @@ impl AppState {
             .timeout(Duration::from_secs(120))
             .build()?;
         let (events, _) = broadcast::channel(64);
+        let mailer = cfg.email.clone().map(Mailer::new).transpose()?;
         Ok(Self(Arc::new(Inner {
             cfg,
             db,
@@ -54,6 +57,7 @@ impl AppState {
             ceremonies: Mutex::new(HashMap::new()),
             limiter: RateLimiter::default(),
             setup_code: Mutex::new(None),
+            mailer,
         })))
     }
 

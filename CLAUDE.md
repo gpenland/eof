@@ -20,7 +20,7 @@ cargo fmt
 
 `.claude/launch.json` defines the `eof` preview server (runs `scripts/dev.sh` on port 8080). Migrations run automatically on boot.
 
-Config (see `src/config.rs`, `.env.example`): `DATABASE_URL` (required), `PUBLIC_URL` (must be https except `http://localhost`; passkeys are bound to its host), `EOF_SETUP_CODE` (first-passkey enrollment; generated and logged if unset), `PORT` (default 8080).
+Config (see `src/config.rs`, `.env.example`): `DATABASE_URL` (required), `PUBLIC_URL` (must be https except `http://localhost`; passkeys are bound to its host), `EOF_SETUP_CODE` (first-passkey enrollment; generated and logged if unset), `PORT` (default 8080), and optionally `CLOUDFLARE_EMAIL_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` + `EMAIL_FROM` (+ `EMAIL_FROM_NAME`) + `EMAIL_TO` to email the news via Cloudflare Email Service (`CLOUDFLARE_EMAIL_API_URL` overrides the endpoint for local mocks).
 
 ## Architecture
 
@@ -42,7 +42,7 @@ Config (see `src/config.rs`, `.env.example`): `DATABASE_URL` (required), `PUBLIC
 
 **Web UI.** Vanilla ES modules, no build step. `web/js/app.js` is the shell (auth gate, client-side router, palette, keyboard shortcuts, SSE feed); each page (`tasks.js`, `countdown.js`, `news.js`, `settings.js`) is a module it mounts. `util.js` has the DOM helper `h()`, fetch wrappers, and toasts. Client routes must also be listed in `APP_ROUTES` in `src/web.rs` so the server returns `index.html` for them.
 
-**News.** Published as Markdown via the `publish_issue` MCP tool (one edition per day; republishing replaces it). Markdown is rendered with pulldown-cmark and sanitized server-side with ammonia in `domain/news.rs`.
+**News.** Published as Markdown via the `publish_issue` MCP tool (one edition per day; republishing replaces it). When email is configured, today's edition is emailed once on first publish (`src/email.rs`, tracked by `issues.emailed_at`; runs in the background so mail failures never fail the publish); `email_issue` re-sends on demand. Markdown is rendered with pulldown-cmark and sanitized server-side with ammonia in `domain/news.rs`.
 
 ## Deployment
 
