@@ -55,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         .nest("/api", api::router())
         .route("/healthz", get(|| async { "ok" }))
         .fallback(static_or_app)
+        .layer(middleware::from_fn_with_state(state.clone(), auth::renew_cookie))
         .layer(middleware::from_fn_with_state(state.clone(), security::headers))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
