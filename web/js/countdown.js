@@ -1,7 +1,9 @@
 // Countdown — "the horizon".
-// Every date is drawn at a size proportional to how close it is (log scale of time remaining),
-// so the near things are huge and the far ones sit small and faint near the horizon.
-// They visibly grow every day until they arrive. Past dates drop into the rear-view.
+// Two readings of distance, layered:
+//  · a shared, linear time ruler: every event gets a reach bar on the same scale (today → the
+//    farthest date), with month ticks, so "twice as far" literally looks twice as long;
+//  · a gentle size/opacity falloff (log time) so near things still loom larger.
+// Vertical spacing between rows also follows the gap in days. Past dates drop into the rear-view.
 
 import { h, icon, get, post, patch, del, toast, fail, sheet, iso, parseISO, today, fmtShort, fmtLong, fmtTime, ago, fill } from './util.js';
 
@@ -56,8 +58,11 @@ function render() {
       h('p', { style: { marginTop: '16px' } }, h('button.btn', { onclick: () => edit(null) }, icon('plus'), 'Add the first date'))));
     return;
   }
-  fill(S.body, 
-    h('div.road', upcoming.map(eventEl)),
+  const scale = timeScale(upcoming);
+  fill(S.body,
+    h('div.road',
+      upcoming.length ? ruler(scale) : null,
+      upcoming.map((c, i) => eventEl(c, scale, i ? daysLeft(c) - daysLeft(upcoming[i - 1]) : 0))),
     upcoming.length ? h('div.horizon-line', 'horizon') : null,
     past.length ? h('div.rearview', h('h4', 'In the rear-view'),
       past.map((c) => h('div.past-ev',
@@ -73,11 +78,38 @@ function agoDays(c) {
   return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 60 ? `${n} days ago` : fmtLong(target(c));
 }
 
-function eventEl(c) {
+/** Linear scale shared by every row: today at 0, the end of the farthest event's month at 1. */
+function timeScale(upcoming) {
+  const now = new Date();
+  const far = upcoming.length ? target(upcoming[upcoming.length - 1]) : now;
+  const end = new Date(far.getFullYear(), far.getMonth() + 1, 1); // round out to the next month start
+  const span = Math.max(14, (end - now) / 864e5);
+  const months = [];
+  for (let m = new Date(now.getFullYear(), now.getMonth() + 1, 1); m <= end; m = new Date(m.getFullYear(), m.getMonth() + 1, 1)) {
+    months.push({ at: (m - now) / 864e5 / span, date: m });
+  }
+  return { span, months, x: (days) => Math.min(1, Math.max(0, days / span)) };
+}
+
+const pct = (f) => `${(f * 100).toFixed(2)}%`;
+const monthName = (d) => new Intl.DateTimeFormat(undefined, { month: 'short', ...(d.getMonth() === 0 ? { year: '2-digit' } : {}) }).format(d);
+
+function ruler(scale) {
+  // Label every month while they fit; thin out on long spans.
+  const every = Math.ceil(scale.months.length / 10);
+  return h('div.ruler', { 'aria-hidden': 'true' },
+    h('span.today', { style: { left: '0%' } }, 'Today'),
+    scale.months.map((m, i) => h('span', {
+      // Skip labels that would collide with "Today" or be thinned out.
+      class: [m.date.getMonth() === 0 && 'yr', ((i + 1) % every || m.at < 0.07) && 'minor', m.at < 0.16 && 'near'].filter(Boolean).join(' '),
+      style: { left: pct(m.at) },
+    }, monthName(m.date))));
+}
+
+function eventEl(c, scale, gapDays) {
   const s = proximity(c);
   const d = c.days_until;
-  const created = new Date(c.created_at);
-  const journey = Math.min(1, Math.max(0, (Date.now() - created) / Math.max(1, target(c) - created)));
+  const reach = scale.x(daysLeft(c));
   const when = parseISO(c.date);
   const dateLabel = when.getFullYear() === today().getFullYear() ? fmtShort(when) : fmtLong(when);
 
@@ -88,7 +120,7 @@ function eventEl(c) {
 
   const el = h('div.event', {
     class: [d === 0 && 'today', d > 0 && d <= 3 && 'soon'].filter(Boolean).join(' '),
-    style: { '--s': s.toFixed(3) },
+    style: { '--s': s.toFixed(3), '--gap': Math.min(1, gapDays / 60).toFixed(3) },
     tabIndex: 0, role: 'button',
     'aria-label': `${c.title}, ${d === 0 ? 'today' : `in ${d} day${d === 1 ? '' : 's'}`}, ${dateLabel}`,
     onclick: () => edit(c),
@@ -103,7 +135,10 @@ function eventEl(c) {
       d === 0 && !c.all_day && Date.now() < target(c) ? h('span.tick', { 'data-at': c.at }) : null,
       c.created_by !== 'you' ? h('span.by-ai', '✦ ', c.created_by) : null),
     c.note ? h('div.note', c.note) : null,
-    h('div.journey', { title: `${Math.round(journey * 100)}% of the wait since you added it` }, h('i', { style: { width: `${(journey * 100).toFixed(1)}%` } }))));
+    h('div.reach', { title: `${Math.round(daysLeft(c))} of the ${Math.round(scale.span)} days shown` },
+      scale.months.map((m) => h('b', { class: m.date.getMonth() === 0 ? 'yr' : null, style: { left: pct(m.at) } })),
+      h('i', { style: { width: pct(reach) } }),
+      h('em', { style: { left: pct(reach) } }))));
   return el;
 }
 
