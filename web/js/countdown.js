@@ -1,0 +1,175 @@
+// Countdown — "the horizon".
+// Every date is drawn at a size proportional to how close it is (log scale of time remaining),
+// so the near things are huge and the far ones sit small and faint near the horizon.
+// They visibly grow every day until they arrive. Past dates drop into the rear-view.
+
+import { h, icon, get, post, patch, del, toast, fail, sheet, iso, parseISO, today, fmtShort, fmtLong, fmtTime, ago, fill } from './util.js';
+
+let S = null;
+const HORIZON_DAYS = 730; // things two years out are at the vanishing point
+
+export function mount(root) {
+  S = { root, items: [], timer: null, body: h('div') };
+  root.append(h('div.horizon',
+    h('div.page-head',
+      h('div', h('div.eyebrow', 'Countdown'), h('h1', 'On the horizon')),
+      h('div.grow'),
+      h('button.btn.primary', { onclick: () => edit(null) }, icon('plus'), 'New date')),
+    S.body));
+  load();
+  S.timer = setInterval(tick, 1000);
+  return {
+    unmount() { clearInterval(S.timer); S = null; },
+    onChange(ev) { if (ev.area === 'countdowns' || ev.area === '*') load(); },
+    key(e) { if (e.key === 'n') { e.preventDefault(); edit(null); } },
+    create: () => edit(null),
+  };
+}
+
+async function load() {
+  try {
+    const items = await get('/api/countdowns?include_past=true');
+    if (!S) return;
+    S.items = items;
+    render();
+  } catch (e) { fail(e); }
+}
+
+/** Moment the countdown aims at: midnight for all-day dates, else the exact time. */
+const target = (c) => (c.all_day ? parseISO(c.date) : new Date(c.at));
+const daysLeft = (c) => Math.max(0, (target(c) - Date.now()) / 864e5);
+// Log-time closeness in [0,1], then eased so a week away feels clearly bigger than a month away.
+const proximity = (c) => {
+  const raw = Math.min(1, Math.max(0, 1 - Math.log1p(daysLeft(c)) / Math.log1p(HORIZON_DAYS)));
+  return Math.max(0.02, raw ** 1.7);
+};
+const isPast = (c) => c.days_until < 0 || (c.days_until === 0 && !c.all_day && Date.now() - target(c) > 6 * 36e5);
+
+function render() {
+  const upcoming = S.items.filter((c) => !isPast(c)).sort((a, b) => target(a) - target(b));
+  const past = S.items.filter(isPast).sort((a, b) => target(b) - target(a)).slice(0, 12);
+  S.lastRender = Date.now();
+
+  if (!upcoming.length && !past.length) {
+    fill(S.body, h('div.empty', h('div.art', '◌'), h('h3', 'Nothing on the horizon'),
+      h('p', 'Add a date you’re looking forward to — or dreading. It will grow on this page as it gets closer.'),
+      h('p', { style: { marginTop: '16px' } }, h('button.btn', { onclick: () => edit(null) }, icon('plus'), 'Add the first date'))));
+    return;
+  }
+  fill(S.body, 
+    h('div.road', upcoming.map(eventEl)),
+    upcoming.length ? h('div.horizon-line', 'horizon') : null,
+    past.length ? h('div.rearview', h('h4', 'In the rear-view'),
+      past.map((c) => h('div.past-ev',
+        h('span.grow', c.title),
+        h('span', { style: { font: '12px var(--mono)' } }, agoDays(c)),
+        h('button.btn.sm.ghost.icon-only', { 'aria-label': `Remove ${c.title}`, onclick: () => remove(c) }, icon('x'))))) : null,
+  );
+  tick();
+}
+
+function agoDays(c) {
+  const n = -c.days_until;
+  return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 60 ? `${n} days ago` : fmtLong(target(c));
+}
+
+function eventEl(c) {
+  const s = proximity(c);
+  const d = c.days_until;
+  const created = new Date(c.created_at);
+  const journey = Math.min(1, Math.max(0, (Date.now() - created) / Math.max(1, target(c) - created)));
+  const when = parseISO(c.date);
+  const dateLabel = when.getFullYear() === today().getFullYear() ? fmtShort(when) : fmtLong(when);
+
+  let num, unit;
+  if (d === 0) { num = 'Today'; unit = c.all_day ? '' : (Date.now() < target(c) ? 'until ' + fmtTime(target(c)) : 'now'); }
+  else if (!c.all_day && target(c) - Date.now() < 48 * 36e5) { num = h('span.tick', { 'data-at': c.at }, ''); unit = 'hours left'; }
+  else { num = String(d); unit = d === 1 ? 'day' : 'days'; }
+
+  const el = h('div.event', {
+    class: [d === 0 && 'today', d > 0 && d <= 3 && 'soon'].filter(Boolean).join(' '),
+    style: { '--s': s.toFixed(3) },
+    tabIndex: 0, role: 'button',
+    'aria-label': `${c.title}, ${d === 0 ? 'today' : `in ${d} day${d === 1 ? '' : 's'}`}, ${dateLabel}`,
+    onclick: () => edit(c),
+    onkeydown: (e) => e.key === 'Enter' && edit(c),
+  },
+  h('div.num', num, unit ? h('small', unit) : null),
+  h('div.what',
+    h('div.title', c.title),
+    h('div.when',
+      h('span', dateLabel + (c.all_day ? '' : ' · ' + fmtTime(target(c)))),
+      d > 13 ? h('span', '· ' + spanLabel(d)) : null,
+      d === 0 && !c.all_day && Date.now() < target(c) ? h('span.tick', { 'data-at': c.at }) : null,
+      c.created_by !== 'you' ? h('span.by-ai', '✦ ', c.created_by) : null),
+    c.note ? h('div.note', c.note) : null,
+    h('div.journey', { title: `${Math.round(journey * 100)}% of the wait since you added it` }, h('i', { style: { width: `${(journey * 100).toFixed(1)}%` } }))));
+  return el;
+}
+
+function spanLabel(d) {
+  if (d < 60) return `${Math.floor(d / 7)} wk ${d % 7 ? `${d % 7} d` : ''}`.trim();
+  const months = Math.round(d / 30.44);
+  if (months < 12) return `≈ ${months} months`;
+  const y = Math.floor(months / 12), m = months % 12;
+  return `≈ ${y} yr${m ? ` ${m} mo` : ''}`;
+}
+
+function tick() {
+  if (!S || document.hidden) return;
+  for (const el of S.root.querySelectorAll('.tick')) {
+    const ms = Math.max(0, new Date(el.dataset.at) - Date.now());
+    const hh = Math.floor(ms / 36e5), mm = Math.floor((ms % 36e5) / 6e4), ss = Math.floor((ms % 6e4) / 1e3);
+    el.textContent = `${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  }
+  // Sizes drift continuously; repaint once a minute (or when the day rolls over).
+  if (Date.now() - S.lastRender > 60_000) load();
+}
+
+function edit(c) {
+  sheet((box, close) => {
+    const title = h('input.input', { value: c?.title ?? '', placeholder: 'What are you counting down to?', maxLength: 200 });
+    const date = h('input.input', { type: 'date', value: c?.date ?? '', required: true });
+    const time = h('input.input', { type: 'time', value: c?.time ?? '' });
+    const note = h('input.input', { value: c?.note ?? '', placeholder: 'Optional note' });
+    const preview = h('div.preview');
+    const upd = () => {
+      if (!date.value) { preview.textContent = ''; return; }
+      const n = Math.round((parseISO(date.value) - today()) / 864e5);
+      preview.textContent = n === 0 ? 'That’s today.' : n > 0 ? `In ${n} day${n === 1 ? '' : 's'} — ${fmtShort(parseISO(date.value))}` : `${-n} days ago`;
+    };
+    date.addEventListener('input', upd); upd();
+    const save = async () => {
+      if (!title.value.trim() || !date.value) { (title.value.trim() ? date : title).focus(); return; }
+      const body = { title: title.value.trim(), date: date.value, time: time.value || null, note: note.value };
+      try {
+        if (c) await patch(`/api/countdowns/${c.id}`, body);
+        else await post('/api/countdowns', body);
+        close(); load();
+      } catch (e) { fail(e); }
+    };
+    [title, date, time, note].forEach((i) => i.addEventListener('keydown', (e) => e.key === 'Enter' && save()));
+    box.append(
+      h('h2', c ? 'Edit date' : 'New date'),
+      h('label.field', h('span', 'Title'), title),
+      h('div.row2', h('label.field', h('span', 'Date'), date), h('label.field', h('span', 'Time (optional)'), time)),
+      h('label.field', h('span', 'Note'), note),
+      preview,
+      h('div.actions',
+        c ? h('button.btn.ghost.danger', { onclick: () => { close(); remove(c); } }, icon('trash'), 'Delete') : null,
+        h('span.grow'),
+        h('button.btn.ghost', { onclick: close }, 'Cancel'),
+        h('button.btn.primary', { onclick: save }, c ? 'Save' : 'Add date')));
+  });
+}
+
+async function remove(c) {
+  try {
+    await del(`/api/countdowns/${c.id}`);
+    load();
+    toast(`Removed “${c.title}”`, { action: 'Undo', onAction: async () => {
+      await post('/api/countdowns', { title: c.title, date: c.date, time: c.time, note: c.note });
+      load();
+    } });
+  } catch (e) { fail(e); }
+}

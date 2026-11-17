@@ -1,0 +1,9 @@
+{
+  "name": "EOF",
+  "short_name": "EOF",
+  "start_url": "/tasks",
+  "display": "standalone",
+  "background_color": "#f6f4ef",
+  "theme_color": "#f6f4ef",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

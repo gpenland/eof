@@ -1,0 +1,380 @@
+//! MCP server (Streamable HTTP transport, JSON responses).
+//!
+//! Every capability of the web UI is a tool here, implemented by the same `actions` the UI uses.
+//! Changes made by an AI are broadcast live to open browsers and stamped with the AI's name.
+
+use axum::{
+    Json,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+};
+use chrono::NaiveDate;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use crate::{
+    actions,
+    domain::{self, countdowns, news, tasks},
+    error::{AppError, AppResult},
+    events::Actor,
+    oauth::Machine,
+    state::AppState,
+};
+
+const PROTOCOLS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+const INSTRUCTIONS: &str = "EOF is the user's personal productivity app: a Google-Tasks-style todo list, \
+a countdown of upcoming dates, and a daily news edition. Start with get_overview to see what's due. \
+Dates are YYYY-MM-DD in the user's timezone (\"today\", \"tomorrow\" and weekday names also work). \
+Tags are lowercase words without '#'. To deliver the daily news, call publish_issue with plain Markdown: \
+'## Section' headings, short paragraphs and bullet lists, links inline; no images.";
+
+pub async fn get_not_allowed() -> impl IntoResponse {
+    (StatusCode::METHOD_NOT_ALLOWED, [("allow", "POST")], "This MCP server does not stream; POST JSON-RPC instead.")
+}
+
+pub async fn handle(State(st): State<AppState>, m: Machine, _h: HeaderMap, Json(body): Json<Value>) -> Response {
+    match body {
+        Value::Array(batch) => {
+            let mut out = Vec::new();
+            for msg in batch {
+                if let Some(r) = handle_one(&st, &m.actor, msg).await {
+                    out.push(r);
+                }
+            }
+            if out.is_empty() { StatusCode::ACCEPTED.into_response() } else { Json(Value::Array(out)).into_response() }
+        }
+        msg => match handle_one(&st, &m.actor, msg).await {
+            Some(r) => Json(r).into_response(),
+            None => StatusCode::ACCEPTED.into_response(),
+        },
+    }
+}
+
+async fn handle_one(st: &AppState, actor: &Actor, msg: Value) -> Option<Value> {
+    let id = msg.get("id").cloned();
+    let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
+    let params = msg.get("params").cloned().unwrap_or(json!({}));
+    // Notifications (no id) and client responses get no reply.
+    let id = id?;
+    let result = match method {
+        "initialize" => {
+            let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOLS[0]);
+            let version = PROTOCOLS.iter().find(|v| **v == asked).copied().unwrap_or(PROTOCOLS[0]);
+            Ok(json!({
+                "protocolVersion": version,
+                "capabilities": { "tools": { "listChanged": false } },
+                "serverInfo": { "name": "eof", "title": "EOF", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": INSTRUCTIONS,
+            }))
+        }
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({ "tools": tool_list() })),
+        "tools/call" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            let args = params.get("arguments").cloned().unwrap_or(json!({}));
+            Ok(match call(st, actor, &name, &args).await {
+                Ok(v) => json!({
+                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }],
+                    "structuredContent": if v.is_object() { v.clone() } else { json!({ "result": v }) },
+                    "isError": false,
+                }),
+                Err(e) => json!({
+                    "content": [{ "type": "text", "text": format!("Error: {}", e.public_message()) }],
+                    "isError": true,
+                }),
+            })
+        }
+        "resources/list" => Ok(json!({ "resources": [] })),
+        "prompts/list" => Ok(json!({ "prompts": [] })),
+        _ => Err((-32601, format!("method not found: {method}"))),
+    };
+    Some(match result {
+        Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
+        Err((code, message)) => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } }),
+    })
+}
+
+// ── Argument helpers ───────────────────────────────────────────────────────
+
+fn s(a: &Value, k: &str) -> Option<String> {
+    a.get(k).and_then(Value::as_str).map(String::from)
+}
+
+fn req_s(a: &Value, k: &str) -> AppResult<String> {
+    s(a, k).ok_or_else(|| AppError::bad(format!("`{k}` is required")))
+}
+
+fn uuid(a: &Value, k: &str) -> AppResult<Uuid> {
+    req_s(a, k)?.parse().map_err(|_| AppError::bad(format!("`{k}` must be an id from a list_* tool")))
+}
+
+fn opt_uuid(a: &Value, k: &str) -> AppResult<Option<Uuid>> {
+    s(a, k).filter(|v| !v.is_empty()).map(|v| v.parse().map_err(|_| AppError::bad(format!("`{k}` must be an id")))).transpose()
+}
+
+fn tags(a: &Value) -> Option<Vec<String>> {
+    a.get("tags").and_then(Value::as_array).map(|v| v.iter().filter_map(Value::as_str).map(String::from).collect())
+}
+
+async fn date(st: &AppState, a: &Value, k: &str) -> AppResult<Option<NaiveDate>> {
+    match s(a, k) {
+        Some(v) if !v.is_empty() => Ok(Some(domain::parse_date(&v, domain::today(&st.db).await)?)),
+        _ => Ok(None),
+    }
+}
+
+/// For patches: absent → None, null → Some(None), value → Some(Some(v)).
+fn tri(a: &Value, k: &str) -> Option<Option<String>> {
+    match a.get(k) {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(v) => Some(v.as_str().map(String::from).filter(|s| !s.is_empty())),
+    }
+}
+
+async fn edition(st: &AppState, a: &Value) -> AppResult<NaiveDate> {
+    date(st, a, "edition").await?.ok_or_else(|| AppError::bad("`edition` (YYYY-MM-DD) is required"))
+}
+
+// ── Dispatch ───────────────────────────────────────────────────────────────
+
+async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<Value> {
+    let db = &st.db;
+    Ok(match name {
+        "get_overview" => actions::overview(st).await?,
+
+        "list_tasks" => {
+            let q = tasks::TaskQuery {
+                list_id: opt_uuid(a, "list_id")?,
+                status: s(a, "status"),
+                tag: s(a, "tag"),
+                search: s(a, "search"),
+                due_before: date(st, a, "due_before").await?,
+                due_after: date(st, a, "due_after").await?,
+                limit: a.get("limit").and_then(Value::as_i64),
+            };
+            json!({ "tasks": tasks::query(db, &q).await? })
+        }
+        "get_task" => json!(tasks::get(db, uuid(a, "id")?).await?),
+        "create_task" => {
+            let input = tasks::NewTask {
+                list_id: opt_uuid(a, "list_id")?,
+                title: req_s(a, "title")?,
+                notes: s(a, "notes"),
+                tags: tags(a),
+                due: date(st, a, "due").await?,
+                repeat: s(a, "repeat").filter(|r| !r.is_empty()),
+                starred: a.get("starred").and_then(Value::as_bool),
+            };
+            json!(actions::create_task(st, actor, input).await?)
+        }
+        "update_task" => {
+            let today = domain::today(db).await;
+            let due = match tri(a, "due") {
+                None => None,
+                Some(None) => Some(None),
+                Some(Some(d)) => Some(Some(domain::parse_date(&d, today)?)),
+            };
+            let p = tasks::TaskPatch {
+                title: s(a, "title"),
+                notes: s(a, "notes"),
+                tags: tags(a),
+                due,
+                repeat: tri(a, "repeat"),
+                starred: a.get("starred").and_then(Value::as_bool),
+                list_id: opt_uuid(a, "list_id")?,
+            };
+            json!(actions::update_task(st, actor, uuid(a, "id")?, p).await?)
+        }
+        "complete_task" => actions::complete_task(st, actor, uuid(a, "id")?).await?,
+        "reopen_task" => json!(actions::uncomplete_task(st, actor, uuid(a, "id")?).await?),
+        "delete_task" => json!({ "deleted": actions::delete_task(st, actor, uuid(a, "id")?).await? }),
+        "move_task" => json!(actions::move_task(st, actor, uuid(a, "id")?, opt_uuid(a, "after_id")?).await?),
+        "clear_completed_tasks" => json!({ "cleared": actions::clear_completed(st, actor, uuid(a, "list_id")?).await? }),
+        "list_task_lists" => json!({ "lists": tasks::lists(db).await? }),
+        "create_task_list" => json!(actions::create_list(st, actor, &req_s(a, "name")?).await?),
+        "rename_task_list" => {
+            actions::rename_list(st, actor, uuid(a, "id")?, &req_s(a, "name")?).await?;
+            json!({ "ok": true })
+        }
+        "delete_task_list" => {
+            actions::delete_list(st, actor, uuid(a, "id")?).await?;
+            json!({ "ok": true })
+        }
+        "list_tags" => {
+            let t = tasks::all_tags(db).await?;
+            json!({ "tags": t.into_iter().map(|(tag, n)| json!({ "tag": tag, "open_tasks": n })).collect::<Vec<_>>() })
+        }
+
+        "list_countdowns" => {
+            let tz = domain::timezone(db).await;
+            let today = domain::today(db).await;
+            let past = a.get("include_past").and_then(Value::as_bool).unwrap_or(false);
+            let v: Vec<_> = countdowns::list(db, past).await?.into_iter().map(|c| countdowns::view(c, tz, today)).collect();
+            json!({ "countdowns": v })
+        }
+        "create_countdown" => {
+            let input = countdowns::NewCountdown {
+                title: req_s(a, "title")?,
+                date: date(st, a, "date").await?.ok_or_else(|| AppError::bad("`date` is required"))?,
+                time: s(a, "time").filter(|t| !t.is_empty()),
+                note: s(a, "note"),
+            };
+            json!(actions::create_countdown(st, actor, input).await?)
+        }
+        "update_countdown" => {
+            let p = countdowns::CountdownPatch {
+                title: s(a, "title"),
+                date: date(st, a, "date").await?,
+                time: tri(a, "time"),
+                note: s(a, "note"),
+            };
+            json!(actions::update_countdown(st, actor, uuid(a, "id")?, p).await?)
+        }
+        "delete_countdown" => {
+            actions::delete_countdown(st, actor, uuid(a, "id")?).await?;
+            json!({ "ok": true })
+        }
+
+        "publish_issue" => {
+            let i = actions::publish_issue(st, actor, date(st, a, "edition").await?, s(a, "title"), &req_s(a, "markdown")?).await?;
+            json!({
+                "ok": true,
+                "edition": i.edition,
+                "title": i.title,
+                "url": format!("{}/news/{}", st.cfg.origin(), i.edition),
+                "sections": news::sections(&i.markdown),
+            })
+        }
+        "list_issues" => {
+            let limit = a.get("limit").and_then(Value::as_i64).unwrap_or(14);
+            json!({ "issues": news::list(db, limit).await? })
+        }
+        "get_issue" => {
+            let which = s(a, "edition").unwrap_or_else(|| "latest".into());
+            let which = if which == "latest" { which } else { domain::parse_date(&which, domain::today(db).await)?.to_string() };
+            let r = news::get(db, &which).await?;
+            json!({
+                "edition": r.issue.edition, "title": r.issue.title, "markdown": r.issue.markdown,
+                "read": r.issue.read_at.is_some(), "minutes": r.minutes, "sections": r.sections,
+            })
+        }
+        "set_issue_read" => {
+            let read = a.get("read").and_then(Value::as_bool).unwrap_or(true);
+            actions::set_issue_read(st, actor, edition(st, a).await?, read).await?;
+            json!({ "ok": true })
+        }
+        "delete_issue" => {
+            actions::delete_issue(st, actor, edition(st, a).await?).await?;
+            json!({ "ok": true })
+        }
+
+        "set_timezone" => {
+            domain::set_timezone(db, &req_s(a, "timezone")?).await?;
+            json!({ "ok": true })
+        }
+        other => return Err(AppError::bad(format!("unknown tool {other}"))),
+    })
+}
+
+// ── Tool catalogue ─────────────────────────────────────────────────────────
+
+fn tool(name: &str, title: &str, desc: &str, props: Value, required: &[&str], read_only: bool, destructive: bool) -> Value {
+    json!({
+        "name": name,
+        "title": title,
+        "description": desc,
+        "inputSchema": { "type": "object", "properties": props, "required": required, "additionalProperties": false },
+        "annotations": { "title": title, "readOnlyHint": read_only, "destructiveHint": destructive, "idempotentHint": read_only, "openWorldHint": false },
+    })
+}
+
+fn tool_list() -> Vec<Value> {
+    let id = json!({ "type": "string", "description": "Task id (uuid) from list_tasks" });
+    let date = |d: &str| json!({ "type": "string", "description": d });
+    let repeat = json!({ "type": ["string", "null"], "enum": ["daily", "weekdays", "weekly", "monthly", "yearly", null],
+                          "description": "Repeat rule. Completing a repeating task logs it and moves the due date forward." });
+    let tags = json!({ "type": "array", "items": { "type": "string" }, "description": "Lowercase tags, e.g. [\"cs2110\", \"exam\"]" });
+    vec![
+        tool("get_overview", "Today at a glance", "Overdue tasks, tasks due today and this week, the next countdowns, and whether today's news issue is in. Call this first.", json!({}), &[], true, false),
+
+        tool("list_tasks", "List tasks", "Search and filter tasks. Defaults to open tasks in all lists, sorted by due date then custom order.", json!({
+            "list_id": { "type": "string", "description": "Restrict to one list (see list_task_lists)" },
+            "status": { "type": "string", "enum": ["open", "completed", "all"] },
+            "tag": { "type": "string" },
+            "search": { "type": "string", "description": "Substring match on title and notes" },
+            "due_before": date("Only tasks due on or before this date"),
+            "due_after": date("Only tasks due on or after this date"),
+            "limit": { "type": "integer", "minimum": 1, "maximum": 2000 },
+        }), &[], true, false),
+        tool("get_task", "Get task", "Fetch one task by id.", json!({ "id": id }), &["id"], true, false),
+        tool("create_task", "Add task", "Add a task (goes to the top of the list, like Google Tasks).", json!({
+            "title": { "type": "string" },
+            "notes": { "type": "string", "description": "Optional details" },
+            "due": date("Due date: YYYY-MM-DD, 'today', 'tomorrow', or a weekday name"),
+            "repeat": repeat,
+            "tags": tags,
+            "starred": { "type": "boolean" },
+            "list_id": { "type": "string", "description": "Defaults to the first list" },
+        }), &["title"], false, false),
+        tool("update_task", "Edit task", "Change any fields of a task. Pass null for due or repeat to clear them.", json!({
+            "id": id,
+            "title": { "type": "string" },
+            "notes": { "type": "string" },
+            "due": { "type": ["string", "null"], "description": "YYYY-MM-DD, 'today', 'tomorrow', weekday, or null to clear" },
+            "repeat": repeat,
+            "tags": tags,
+            "starred": { "type": "boolean" },
+            "list_id": { "type": "string", "description": "Move to another list" },
+        }), &["id"], false, false),
+        tool("complete_task", "Complete task", "Mark a task done. Repeating tasks roll forward to their next date instead.", json!({ "id": id }), &["id"], false, false),
+        tool("reopen_task", "Reopen task", "Mark a completed task as not done.", json!({ "id": id }), &["id"], false, false),
+        tool("delete_task", "Delete task", "Permanently delete a task.", json!({ "id": id }), &["id"], false, true),
+        tool("move_task", "Reorder task", "Custom ordering: place a task directly after another open task in the same list, or at the top if after_id is omitted.", json!({
+            "id": id, "after_id": { "type": "string", "description": "Task to place it after; omit for top" },
+        }), &["id"], false, false),
+        tool("clear_completed_tasks", "Clear completed", "Delete all completed tasks in a list.", json!({ "list_id": { "type": "string" } }), &["list_id"], false, true),
+        tool("list_task_lists", "List task lists", "All task lists with their open-task counts.", json!({}), &[], true, false),
+        tool("create_task_list", "Create list", "Create a new task list.", json!({ "name": { "type": "string" } }), &["name"], false, false),
+        tool("rename_task_list", "Rename list", "Rename a task list.", json!({ "id": { "type": "string" }, "name": { "type": "string" } }), &["id", "name"], false, false),
+        tool("delete_task_list", "Delete list", "Delete a list and every task in it.", json!({ "id": { "type": "string" } }), &["id"], false, true),
+        tool("list_tags", "List tags", "Tags in use on open tasks, with counts.", json!({}), &[], true, false),
+
+        tool("list_countdowns", "List countdowns", "Upcoming dates being counted down to, with days_until.", json!({
+            "include_past": { "type": "boolean", "description": "Also include events that already happened" },
+        }), &[], true, false),
+        tool("create_countdown", "Add countdown", "Start counting down to a date.", json!({
+            "title": { "type": "string" },
+            "date": date("YYYY-MM-DD"),
+            "time": { "type": "string", "description": "Optional local time HH:MM (24h). Omit for all-day." },
+            "note": { "type": "string" },
+        }), &["title", "date"], false, false),
+        tool("update_countdown", "Edit countdown", "Change a countdown. Pass time: null to make it all-day.", json!({
+            "id": { "type": "string" }, "title": { "type": "string" }, "date": date("YYYY-MM-DD"),
+            "time": { "type": ["string", "null"] }, "note": { "type": "string" },
+        }), &["id"], false, false),
+        tool("delete_countdown", "Delete countdown", "Remove a countdown.", json!({ "id": { "type": "string" } }), &["id"], false, true),
+
+        tool("publish_issue", "Publish news issue", "Publish the daily news edition. Plain Markdown: optional '# Title' first line, then '## Section' headings, short paragraphs, bullets and inline links; no images. One issue per date — publishing the same date again replaces it.", json!({
+            "markdown": { "type": "string" },
+            "title": { "type": "string", "description": "Overrides a leading '# Title' line" },
+            "edition": date("Edition date YYYY-MM-DD; defaults to today"),
+        }), &["markdown"], false, false),
+        tool("list_issues", "List news issues", "Recent editions with title, read state, sections and reading time.", json!({
+            "limit": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        }), &[], true, false),
+        tool("get_issue", "Read news issue", "Get an edition's Markdown. Defaults to the latest.", json!({
+            "edition": date("YYYY-MM-DD or 'latest'"),
+        }), &[], true, false),
+        tool("set_issue_read", "Mark issue read", "Mark an edition read or unread.", json!({
+            "edition": date("YYYY-MM-DD"), "read": { "type": "boolean" },
+        }), &["edition"], false, false),
+        tool("delete_issue", "Delete issue", "Delete an edition.", json!({ "edition": date("YYYY-MM-DD") }), &["edition"], false, true),
+
+        tool("set_timezone", "Set timezone", "Set the user's IANA timezone (e.g. America/New_York). Defines 'today'.", json!({
+            "timezone": { "type": "string" },
+        }), &["timezone"], false, false),
+    ]
+}
