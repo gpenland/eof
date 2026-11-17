@@ -310,6 +310,10 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
             actions::delete_issue(st, actor, edition(st, a).await?).await?;
             json!({ "ok": true })
         }
+        "email_issue" => {
+            let i = actions::email_issue(st, actor, edition(st, a).await?).await?;
+            json!({ "ok": true, "edition": i.edition, "emailed_at": i.emailed_at })
+        }
 
         "set_timezone" => {
             domain::set_timezone(db, &req_s(a, "timezone")?).await?;
@@ -397,7 +401,7 @@ fn tool_list() -> Vec<Value> {
         }), &["id"], false, false),
         tool("delete_countdown", "Delete countdown", "Remove a countdown.", json!({ "id": { "type": "string" } }), &["id"], false, true),
 
-        tool("publish_issue", "Publish news issue", "Publish the daily news edition. Plain Markdown: optional '# Title' first line, then '## Section' headings, short paragraphs, bullets and inline links; no images. One issue per date — publishing the same date again replaces it.", json!({
+        tool("publish_issue", "Publish news issue", "Publish the daily news edition. Plain Markdown: optional '# Title' first line, then '## Section' headings, short paragraphs, bullets and inline links; no images. One issue per date — publishing the same date again replaces it. Today's edition is emailed to the user the first time it's published (corrections via republish are not re-sent; use email_issue for that).", json!({
             "markdown": { "type": "string" },
             "title": { "type": "string", "description": "Overrides a leading '# Title' line" },
             "edition": date("Edition date YYYY-MM-DD; defaults to today"),
@@ -410,6 +414,9 @@ fn tool_list() -> Vec<Value> {
         }), &[], true, false),
         tool("set_issue_read", "Mark issue read", "Mark an edition read or unread.", json!({
             "edition": date("YYYY-MM-DD"), "read": { "type": "boolean" },
+        }), &["edition"], false, false),
+        tool("email_issue", "Email news issue", "Email an edition to the user now, even if it was emailed before.", json!({
+            "edition": date("YYYY-MM-DD"),
         }), &["edition"], false, false),
         tool("delete_issue", "Delete issue", "Delete an edition.", json!({ "edition": date("YYYY-MM-DD") }), &["edition"], false, true),
 

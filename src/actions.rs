@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::{
     domain::{self, countdowns, news, tasks},
-    error::AppResult,
+    email,
+    error::{AppError, AppResult},
     events::{Actor, emit},
     state::AppState,
 };
@@ -125,6 +126,41 @@ pub async fn publish_issue(
     };
     let i = news::publish(&st.db, edition, title, markdown, a).await?;
     emit(st, "news", a, format!("published {} ({})", quote(&i.title), i.edition.format("%b %-d")));
+    // Today's edition is emailed once, on first publish. It runs in the background so a slow or
+    // failing mail provider never holds up (or fails) the publish; the outcome arrives as an event.
+    if st.mailer.is_some() && i.edition == domain::today(&st.db).await {
+        tokio::spawn(auto_email(st.clone(), a.clone(), i.edition));
+    }
+    Ok(i)
+}
+
+async fn auto_email(st: AppState, a: Actor, edition: NaiveDate) {
+    let i = match news::claim_email(&st.db, edition).await {
+        Ok(Some(i)) => i,
+        Ok(None) => return, // already emailed (this is a republish)
+        Err(e) => return tracing::error!("claiming {edition} for email: {e}"),
+    };
+    let Some(mailer) = &st.mailer else { return };
+    match mailer.send(&email::issue_message(&i, &st.cfg.origin())).await {
+        Ok(()) => emit(&st, "news", &a, format!("emailed {} to you", quote(&i.title))),
+        Err(e) => {
+            tracing::warn!("emailing the {edition} edition failed: {e:#}");
+            let _ = news::release_email(&st.db, edition).await;
+            emit(&st, "news", &a, format!("couldn’t email {}: {e}", quote(&i.title)));
+        }
+    }
+}
+
+/// Send an edition by email now, whether or not it was emailed before.
+pub async fn email_issue(st: &AppState, a: &Actor, edition: NaiveDate) -> AppResult<news::Issue> {
+    let mailer = st.mailer.as_ref().ok_or_else(|| AppError::bad("email isn’t set up (CLOUDFLARE_EMAIL_TOKEN, CLOUDFLARE_ACCOUNT_ID, EMAIL_FROM, EMAIL_TO)"))?;
+    let i = news::get(&st.db, &edition.to_string()).await?.issue;
+    mailer
+        .send(&email::issue_message(&i, &st.cfg.origin()))
+        .await
+        .map_err(|e| AppError::bad(format!("couldn’t send: {e}")))?;
+    let i = news::mark_emailed(&st.db, edition).await?;
+    emit(st, "news", a, format!("emailed {} to you", quote(&i.title)));
     Ok(i)
 }
 

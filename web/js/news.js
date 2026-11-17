@@ -1,7 +1,7 @@
 // News — one calm edition per day. A broadsheet masthead, a book-like column, a section map that
 // follows you, a hairline progress bar, and an end mark that files the edition as read.
 
-import { h, icon, get, put, toast, fail, menu, store, $, $$, parseISO, fmtFull, fmtMD, fmtTime, fmtWd, fill } from './util.js';
+import { h, icon, get, post, put, toast, fail, menu, store, $, $$, parseISO, fmtFull, fmtMD, fmtTime, fmtWd, fill } from './util.js';
 import { ctx, navigate } from './app.js';
 
 let S = null;
@@ -110,6 +110,7 @@ function renderIssue() {
     { label: 'Sans-serif', check: S.prefs.sans, onClick: () => { S.prefs.sans = true; applyPrefs(); } },
     'hr',
     { label: i.read_at ? 'Mark as unread' : 'Mark as read', icon: 'eye', onClick: () => setRead(!i.read_at) },
+    { label: i.emailed_at ? `Email again · sent ${fmtTime(new Date(i.emailed_at))}` : 'Email to me', icon: 'mail', onClick: sendEmail },
   ]) }, 'Aa');
 
   fill(S.article, 
@@ -141,6 +142,15 @@ function renderIssue() {
     S.observers.push(o);
   }
   onScroll();
+}
+
+async function sendEmail() {
+  const i = S.issue;
+  try {
+    const r = await post(`/api/issues/${i.edition}/email`);
+    i.emailed_at = r.emailed_at;
+    toast('Emailed to you');
+  } catch (e) { fail(e); }
 }
 
 async function setRead(read, quiet = false) {
