@@ -75,9 +75,10 @@ async fn handle_one(st: &AppState, actor: &Actor, msg: Value) -> Option<Value> {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             Ok(match call(st, actor, &name, &args).await {
+                // Compact text only: no tool declares an outputSchema, so a structuredContent copy
+                // would just double every result.
                 Ok(v) => json!({
-                    "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }],
-                    "structuredContent": if v.is_object() { v.clone() } else { json!({ "result": v }) },
+                    "content": [{ "type": "text", "text": tidy(v).to_string() }],
                     "isError": false,
                 }),
                 Err(e) => json!({
@@ -138,6 +139,41 @@ async fn edition(st: &AppState, a: &Value) -> AppResult<NaiveDate> {
     date(st, a, "edition").await?.ok_or_else(|| AppError::bad("`edition` (YYYY-MM-DD) is required"))
 }
 
+// ── Output shaping ─────────────────────────────────────────────────────────
+
+/// Strip noise from tool output, recursively: null/empty fields, ordering and bookkeeping
+/// columns, and a countdown's UTC `at` instant. The model works from the local `date`/`time`
+/// and `days_until`; an all-day `at` is midnight UTC and reads as the previous evening locally.
+fn tidy(v: Value) -> Value {
+    match v {
+        Value::Array(a) => Value::Array(a.into_iter().map(tidy).collect()),
+        Value::Object(mut o) => {
+            o.remove("position");
+            o.remove("updated_at");
+            if o.contains_key("all_day") {
+                o.remove("at");
+            }
+            Value::Object(
+                o.into_iter()
+                    .filter(|(_, v)| !matches!(v, Value::Null) && v != "" && v.as_array().is_none_or(|a| !a.is_empty()))
+                    .map(|(k, v)| (k, tidy(v)))
+                    .collect(),
+            )
+        }
+        v => v,
+    }
+}
+
+/// What a write needs to confirm: the id and the fields that identify and schedule the item.
+fn brief(v: impl serde::Serialize) -> Value {
+    const KEEP: [&str; 11] =
+        ["id", "name", "title", "due", "repeat", "starred", "tags", "completed_at", "date", "time", "days_until"];
+    match json!(v) {
+        Value::Object(o) => Value::Object(o.into_iter().filter(|(k, _)| KEEP.contains(&k.as_str())).collect()),
+        v => v,
+    }
+}
+
 // ── Dispatch ───────────────────────────────────────────────────────────────
 
 async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<Value> {
@@ -168,7 +204,7 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
                 repeat: s(a, "repeat").filter(|r| !r.is_empty()),
                 starred: a.get("starred").and_then(Value::as_bool),
             };
-            json!(actions::create_task(st, actor, input).await?)
+            brief(actions::create_task(st, actor, input).await?)
         }
         "update_task" => {
             let today = domain::today(db).await;
@@ -186,15 +222,19 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
                 starred: a.get("starred").and_then(Value::as_bool),
                 list_id: opt_uuid(a, "list_id")?,
             };
-            json!(actions::update_task(st, actor, uuid(a, "id")?, p).await?)
+            brief(actions::update_task(st, actor, uuid(a, "id")?, p).await?)
         }
-        "complete_task" => actions::complete_task(st, actor, uuid(a, "id")?).await?,
-        "reopen_task" => json!(actions::uncomplete_task(st, actor, uuid(a, "id")?).await?),
-        "delete_task" => json!({ "deleted": actions::delete_task(st, actor, uuid(a, "id")?).await? }),
-        "move_task" => json!(actions::move_task(st, actor, uuid(a, "id")?, opt_uuid(a, "after_id")?).await?),
+        "complete_task" => {
+            let mut r = actions::complete_task(st, actor, uuid(a, "id")?).await?;
+            r["task"] = brief(r["task"].take());
+            r
+        }
+        "reopen_task" => brief(actions::uncomplete_task(st, actor, uuid(a, "id")?).await?),
+        "delete_task" => json!({ "deleted": brief(actions::delete_task(st, actor, uuid(a, "id")?).await?) }),
+        "move_task" => brief(actions::move_task(st, actor, uuid(a, "id")?, opt_uuid(a, "after_id")?).await?),
         "clear_completed_tasks" => json!({ "cleared": actions::clear_completed(st, actor, uuid(a, "list_id")?).await? }),
         "list_task_lists" => json!({ "lists": tasks::lists(db).await? }),
-        "create_task_list" => json!(actions::create_list(st, actor, &req_s(a, "name")?).await?),
+        "create_task_list" => brief(actions::create_list(st, actor, &req_s(a, "name")?).await?),
         "rename_task_list" => {
             actions::rename_list(st, actor, uuid(a, "id")?, &req_s(a, "name")?).await?;
             json!({ "ok": true })
@@ -222,7 +262,7 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
                 time: s(a, "time").filter(|t| !t.is_empty()),
                 note: s(a, "note"),
             };
-            json!(actions::create_countdown(st, actor, input).await?)
+            brief(actions::create_countdown(st, actor, input).await?)
         }
         "update_countdown" => {
             let p = countdowns::CountdownPatch {
@@ -231,7 +271,7 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
                 time: tri(a, "time"),
                 note: s(a, "note"),
             };
-            json!(actions::update_countdown(st, actor, uuid(a, "id")?, p).await?)
+            brief(actions::update_countdown(st, actor, uuid(a, "id")?, p).await?)
         }
         "delete_countdown" => {
             actions::delete_countdown(st, actor, uuid(a, "id")?).await?;
@@ -377,4 +417,30 @@ fn tool_list() -> Vec<Value> {
             "timezone": { "type": "string" },
         }), &["timezone"], false, false),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tidy_drops_noise_and_countdown_instant() {
+        let v = tidy(json!({ "countdowns": [{
+            "id": "x", "title": "Trip", "at": "2026-11-22T00:00:00Z", "all_day": true,
+            "note": "", "time": null, "date": "2026-11-22", "days_until": 5,
+        }], "tasks": [{ "id": "t", "notes": "", "tags": [], "position": 1.0, "updated_at": "z", "starred": false }] }));
+        assert_eq!(
+            v,
+            json!({
+                "countdowns": [{ "id": "x", "title": "Trip", "all_day": true, "date": "2026-11-22", "days_until": 5 }],
+                "tasks": [{ "id": "t", "starred": false }],
+            })
+        );
+    }
+
+    #[test]
+    fn brief_keeps_identity_and_schedule() {
+        let v = brief(json!({ "id": "t", "title": "A", "notes": "long", "due": "2026-11-20", "list_id": "l", "created_by": "you" }));
+        assert_eq!(v, json!({ "id": "t", "title": "A", "due": "2026-11-20" }));
+    }
 }
