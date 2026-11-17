@@ -223,7 +223,7 @@ pub async fn create(db: &PgPool, input: NewTask, actor: &Actor, today: NaiveDate
         None => default_list(db).await?,
     };
     let tags = normalize_tags(&input.tags.unwrap_or_default());
-    // New tasks go to the top of "My order", like Google Tasks.
+    // New tasks go to the top of "My order".
     let task: Task = sqlx::query_as(
         "INSERT INTO tasks (id, list_id, title, notes, tags, due, repeat, starred, position, created_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
