@@ -7,9 +7,11 @@
 use axum::{
     Json,
     extract::{FromRequestParts, Request, State},
-    http::{HeaderMap, Method, header, request::Parts},
-    response::{AppendHeaders, IntoResponse},
+    http::{HeaderMap, HeaderValue, Method, header, request::Parts},
+    middleware::Next,
+    response::{AppendHeaders, IntoResponse, Response},
 };
+use std::sync::{Arc, Mutex};
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -54,9 +56,35 @@ impl FromRequestParts<AppState> for Owner {
                 .bind(SESSION_DAYS as i32)
                 .execute(&state.db)
                 .await?;
+            // Ask `renew_cookie` to push the browser's Max-Age forward too, or the cookie
+            // would still vanish 30 days after sign-in.
+            if let Some(slot) = parts.extensions.get::<CookieRenewal>() {
+                *slot.0.lock().unwrap() = Some(token);
+            }
         }
         Ok(Owner { token_hash })
     }
+}
+
+/// Slot the `Owner` extractor fills when it slides a session's expiry.
+#[derive(Clone, Default)]
+struct CookieRenewal(Arc<Mutex<Option<String>>>);
+
+/// Middleware: when a request slid its session forward, re-issue the cookie with a fresh
+/// Max-Age so the browser keeps it as long as the server does.
+pub async fn renew_cookie(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    let slot = CookieRenewal::default();
+    req.extensions_mut().insert(slot.clone());
+    let mut res = next.run(req).await;
+    let token = slot.0.lock().unwrap().take();
+    // A handler that set its own cookie (e.g. logout clearing it) wins.
+    if let Some(token) = token
+        && !res.headers().contains_key(header::SET_COOKIE)
+        && let Ok(v) = HeaderValue::from_str(&set_cookie(&state, &token, SESSION_DAYS * 86400))
+    {
+        res.headers_mut().append(header::SET_COOKIE, v);
+    }
+    res
 }
 
 pub fn session_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
