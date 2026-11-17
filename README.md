@@ -6,7 +6,7 @@ A private productivity app: **tasks**, a **countdown** of dates that matter, and
 
 | Area | What it does |
 | --- | --- |
-| **Tasks** | Google-Tasks-simple lists. Sort by date (Past / Today / Tomorrow / dates / No date) or by your own drag order. Titles, notes, tags, stars, repeats. |
+| **Tasks** | Simple lists. Sort by date (Past / Today / Tomorrow / dates / No date) or by your own drag order. Titles, notes, tags, stars, repeats. |
 | **Countdown** | "The horizon": each date is drawn at a size proportional to how close it is (log time), so near things are big and far ones sit small near the horizon. Under 48 hours it ticks live. Past dates drop into the rear-view. |
 | **News** | One edition per day, published as Markdown by your morning Claude job. Broadsheet masthead, book-like column, section map that follows you, progress hairline. Reaching the end marks it read. |
 | **MCP** | `/mcp` exposes 25 tools covering every UI action. Changes an AI makes show up live in open browsers, with a ✦ and the AI's name. |

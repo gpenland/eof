@@ -24,7 +24,7 @@ use crate::{
 
 const PROTOCOLS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS: &str = "EOF is the user's personal productivity app: a Google-Tasks-style todo list, \
+const INSTRUCTIONS: &str = "EOF is the user's personal productivity app: a todo list, \
 a countdown of upcoming dates, and a daily news edition. Start with get_overview to see what's due. \
 Dates are YYYY-MM-DD in the user's timezone (\"today\", \"tomorrow\" and weekday names also work). \
 Tags are lowercase words without '#'. To deliver the daily news, call publish_issue with plain Markdown: \
@@ -310,7 +310,7 @@ fn tool_list() -> Vec<Value> {
             "limit": { "type": "integer", "minimum": 1, "maximum": 2000 },
         }), &[], true, false),
         tool("get_task", "Get task", "Fetch one task by id.", json!({ "id": id }), &["id"], true, false),
-        tool("create_task", "Add task", "Add a task (goes to the top of the list, like Google Tasks).", json!({
+        tool("create_task", "Add task", "Add a task (goes to the top of the list).", json!({
             "title": { "type": "string" },
             "notes": { "type": "string", "description": "Optional details" },
             "due": date("Due date: YYYY-MM-DD, 'today', 'tomorrow', or a weekday name"),

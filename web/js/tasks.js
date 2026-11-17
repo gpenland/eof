@@ -1,4 +1,4 @@
-// Tasks — Google-Tasks simple, with three additions:
+// Tasks — simple lists, with three additions:
 //  • a natural-language composer ("Quiz 4 fri #cs2110 !") that shows what it understood as chips,
 //  • a two-week day ribbon you can drop tasks onto to reschedule them,
 //  • provenance: anything an AI added is marked ✦ with its name.
