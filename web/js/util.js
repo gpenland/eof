@@ -180,7 +180,11 @@ export function menu(anchor, items) {
   const w = el.offsetWidth, hgt = el.offsetHeight;
   el.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
   el.style.top = (r.bottom + 6 + hgt > innerHeight ? Math.max(8, r.top - hgt - 6) : r.bottom + 6) + 'px';
-  setTimeout(() => document.addEventListener('click', closeMenus, { once: true }));
+  // Close on any outside click. The listener lives exactly as long as the menu: closeMenus() removes it
+  // however the menu closes (item pick, Escape, route change), so a stale one can't swallow a later click.
+  const outside = (e) => { if (!el.contains(e.target)) closeMenus(); };
+  const arm = setTimeout(() => document.addEventListener('click', outside));
+  offOutside = () => { clearTimeout(arm); document.removeEventListener('click', outside); };
   el.querySelector('button')?.focus();
   el.addEventListener('keydown', (e) => {
     const bs = $$('button', el); const i = bs.indexOf(document.activeElement);
@@ -190,7 +194,11 @@ export function menu(anchor, items) {
   });
   return el;
 }
-export function closeMenus() { $$('.menu').forEach((m) => m.remove()); }
+let offOutside = null;
+export function closeMenus() {
+  offOutside?.(); offOutside = null;
+  $$('.menu').forEach((m) => m.remove());
+}
 
 /** Modal sheet; returns {el, close}. */
 export function sheet(build) {
