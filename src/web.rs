@@ -16,7 +16,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{api, auth, mcp, oauth, security, state::AppState};
+use crate::{api, auth, capture, mcp, oauth, security, state::AppState};
 
 #[derive(RustEmbed)]
 #[folder = "web/"]
@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
         .route("/.well-known/openid-configuration", get(oauth::authorization_server))
         .route("/oauth/register", post(oauth::register))
         .route("/oauth/token", post(oauth::token))
+        .route("/capture", post(capture::handle))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

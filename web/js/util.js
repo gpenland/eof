@@ -75,6 +75,7 @@ const P = {
   link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
 };
 export function icon(name, cls = '') {
@@ -125,6 +126,9 @@ export const fmtFull = (d) => fmt({ weekday: 'long', month: 'long', day: 'numeri
 export const fmtMD = (d) => fmt({ month: 'short', day: 'numeric' }).format(d);
 export const fmtWd = (d) => fmt({ weekday: 'short' }).format(d);
 export const fmtTime = (d) => fmt({ hour: 'numeric', minute: '2-digit' }).format(d);
+/** "T-14", "day of", "+2" — a countdown milestone's distance from its date. */
+export const milestoneLabel = (n) => (n > 0 ? `T-${n}` : n === 0 ? 'day of' : `+${-n}`);
+
 export function relDay(isoDate) {
   const n = dayDiff(parseISO(isoDate), today());
   if (n === 0) return 'Today';

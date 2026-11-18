@@ -26,6 +26,12 @@ pub struct Task {
     pub created_by: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Set when this task is a milestone of a countdown (see `milestones`).
+    pub countdown_id: Option<Uuid>,
+    pub days_before: Option<i32>,
+    /// The countdown's title; only filled in by `query`.
+    #[sqlx(default)]
+    pub countdown_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -103,7 +109,7 @@ fn check_repeat(r: &Option<String>) -> AppResult<()> {
     }
 }
 
-fn check_title(t: &str) -> AppResult<String> {
+pub(crate) fn check_title(t: &str) -> AppResult<String> {
     let t = t.trim();
     if t.is_empty() {
         return Err(AppError::bad("title can't be empty"));
@@ -186,7 +192,7 @@ pub async fn query(db: &PgPool, q: &TaskQuery) -> AppResult<Vec<Task>> {
     }
     let tag = q.tag.as_ref().map(|t| normalize_tags(std::slice::from_ref(t))).and_then(|v| v.into_iter().next());
     Ok(sqlx::query_as(
-        "SELECT * FROM tasks
+        "SELECT *, (SELECT c.title FROM countdowns c WHERE c.id = tasks.countdown_id) AS countdown_title FROM tasks
          WHERE ($1::uuid IS NULL OR list_id = $1)
            AND ($2 = 'all' OR ($2 = 'open' AND completed_at IS NULL) OR ($2 = 'completed' AND completed_at IS NOT NULL))
            AND ($3::text IS NULL OR $3 = ANY(tags))

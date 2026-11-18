@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-EOF is a single-user, private productivity app (tasks, countdowns, a daily news edition). One Rust binary (axum + sqlx/Postgres) serves the JSON API, an MCP endpoint, passkey/OAuth auth, and the web UI. The UI in `web/` and the SQL in `migrations/` are compiled into the binary (`rust-embed`, `sqlx::migrate!`), so changes to either need a rebuild/restart, not just a page reload.
+EOF is a single-user, private productivity app (tasks, countdowns, a daily news edition), installable as a PWA with Web Push. One Rust binary (axum + sqlx/Postgres) serves the JSON API, an MCP endpoint, passkey/OAuth auth, and the web UI. The UI in `web/` and the SQL in `migrations/` are compiled into the binary (`rust-embed`, `sqlx::migrate!`), so changes to either need a rebuild/restart, not just a page reload.
 
 ## Commands
 
@@ -12,7 +12,7 @@ EOF is a single-user, private productivity app (tasks, countdowns, a daily news 
 createdb eof          # once; local Postgres (Homebrew)
 ./scripts/dev.sh      # cargo run with DATABASE_URL, PUBLIC_URL=http://localhost:8080, setup code TEST-CODE-2026, debug logs
 cargo build
-cargo test            # only unit tests so far are in src/domain/news.rs
+cargo test            # unit tests: domain/news.rs, domain/quickadd.rs, push.rs (RFC 8291 round-trip), mcp.rs
 cargo test <name>     # single test, e.g. cargo test sanitizes_html
 cargo clippy
 cargo fmt
@@ -42,7 +42,13 @@ Config (see `src/config.rs`, `.env.example`): `DATABASE_URL` (required), `PUBLIC
 
 **Web UI.** Vanilla ES modules, no build step. `web/js/app.js` is the shell (auth gate, client-side router, palette, keyboard shortcuts, SSE feed); each page (`tasks.js`, `countdown.js`, `news.js`, `settings.js`) is a module it mounts. `util.js` has the DOM helper `h()`, fetch wrappers, and toasts. Client routes must also be listed in `APP_ROUTES` in `src/web.rs` so the server returns `index.html` for them.
 
-**News.** Published as Markdown via the `publish_issue` MCP tool (one edition per day; republishing replaces it). When email is configured, today's edition is emailed once on first publish (`src/email.rs`, tracked by `issues.emailed_at`; runs in the background so mail failures never fail the publish); `email_issue` re-sends on demand. Markdown is rendered with pulldown-cmark and sanitized server-side with ammonia in `domain/news.rs`.
+**Quick add.** `domain/quickadd.rs` is a port of `web/js/quickadd.js` (the composer's live parser): "Quiz 4 fri #cs2110 !" → title/due/repeat/tags/star. Keep the two in step. It backs the `quick_add` MCP tool and `POST /capture` (`capture.rs`), a bearer-token endpoint for iOS Shortcuts that accepts JSON `{text, list?}`, a `text=` form or a plain-text body and answers in plain text (JSON with `Accept: application/json`).
+
+**Countdown milestones.** A countdown's "T-minus plan" is ordinary tasks with `countdown_id` + `days_before` (`domain/milestones.rs`). `actions::update_countdown` moves open milestones with the date (`follow`); editing a milestone's due date by hand keeps the new distance (`rebase`), clearing it unlinks. `tasks::query` fills `countdown_title`.
+
+**Push.** `push.rs` implements Web Push without an SDK: VAPID ES256 JWTs with a P-256 key generated once into `settings.vapid_private`, payloads encrypted per RFC 8291 (`aes128gcm`). 404/410 from a push service deletes the subscription. A once-a-minute scheduler sends the morning summary at `settings.push_digest_hour` (owner's local time, default 8, `null` = off; claimed per day via `push_digest_last`), and the first publish of today's edition is announced once (`issues.pushed_at`). `web/sw.js` only shows notifications and routes taps; it caches nothing. On iPhone, push requires the app to be added to the Home Screen.
+
+**News.** Published as Markdown via the `publish_issue` MCP tool (one edition per day; republishing replaces it). When email is configured, today's edition is emailed once on first publish (`src/email.rs`, tracked by `issues.emailed_at`; runs in the background so mail failures never fail the publish); `email_issue` re-sends on demand. Markdown is rendered with pulldown-cmark and sanitized server-side with ammonia in `domain/news.rs`. Today's edition opens with a live "Your day" box (`news.js`, from `/api/overview`: due/overdue tasks, countdowns, `done_yesterday`) rendered client-side, not stored in the Markdown.
 
 ## Deployment
 

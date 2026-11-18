@@ -1,7 +1,7 @@
 // News — one calm edition per day. A broadsheet masthead, a book-like column, a section map that
 // follows you, a hairline progress bar, and an end mark that files the edition as read.
 
-import { h, icon, get, post, put, toast, fail, menu, store, $, $$, parseISO, fmtFull, fmtMD, fmtTime, fmtWd, fill } from './util.js';
+import { h, icon, get, post, put, toast, fail, menu, store, $, $$, parseISO, fmtFull, fmtMD, fmtTime, fmtWd, fill, iso, today, relDay, debounce } from './util.js';
 import { ctx, navigate } from './app.js';
 
 let S = null;
@@ -14,6 +14,7 @@ export function mount(root, path) {
     shelf: h('nav.shelf', { 'aria-label': 'Editions' }),
     mshelf: h('nav.mobile-shelf', { 'aria-label': 'Editions' }),
     article: h('article.issue'),
+    yourday: h('section.yourday', { 'aria-label': 'Your day' }),
     toc: h('nav.toc', { 'aria-label': 'Sections' }),
     observers: [],
   };
@@ -25,6 +26,7 @@ export function mount(root, path) {
     unmount() { removeEventListener('scroll', onScroll); S.progress.remove(); S.observers.forEach((o) => o.disconnect()); S = null; },
     reroute: (p) => openIssue(whichFrom(p)),
     onChange(ev) {
+      if (['tasks', 'countdowns', '*'].includes(ev.area)) refreshDay();
       if (ev.area !== 'news' && ev.area !== '*') return;
       loadShelf().then(() => {
         if (!S) return;
@@ -125,12 +127,14 @@ function renderIssue() {
         h('span', `${i.minutes} min read`),
         i.sections.length ? h('span', `${i.sections.length} sections`) : null,
         h('span', i.created_by !== 'you' ? `✦ ${i.created_by} · ${fmtTime(published)}` : fmtTime(published)))),
+    i.edition === iso(today()) ? S.yourday : null,
     prose,
     end,
     h('nav.pager',
       i.prev ? h('a.prev', { href: `/news/${i.prev}` }, h('small', '← Previous'), fmtMD(parseISO(i.prev))) : h('span'),
       i.next ? h('a.next', { href: `/news/${i.next}` }, h('small', 'Next →'), fmtMD(parseISO(i.next))) : null));
   applyPrefs();
+  if (i.edition === iso(today())) loadDay();
 
   fill(S.toc, ...(i.sections.length ? [h('h4', 'In this edition'),
     ...i.sections.map((name, n) => h('a', { href: `#s${n + 1}`, onclick: (e) => { e.preventDefault(); $(`#s${n + 1}`).scrollIntoView({ behavior: 'smooth' }); } }, name))] : []));
@@ -145,6 +149,55 @@ function renderIssue() {
     S.observers.push(o);
   }
   onScroll();
+}
+
+// ── Front page: "Your day" ──
+// Today's edition opens with your own desk: what's due, what's coming, what you finished. It's
+// drawn live from the overview (not baked into the Markdown), so it stays true all day.
+
+const refreshDay = debounce(() => { if (S?.yourday.isConnected) loadDay(); }, 250);
+
+async function loadDay() {
+  try {
+    const o = await get('/api/overview');
+    if (S) renderDay(o);
+  } catch { /* the edition still reads fine without it */ }
+}
+
+function renderDay(o) {
+  const desk = [...o.tasks.overdue, ...o.tasks.today];
+  const shown = desk.slice(0, 6);
+  const horizon = o.countdowns.filter((c) => c.days_until >= 0 && c.days_until <= 45).slice(0, 3);
+  const y = o.done_yesterday;
+
+  const taskEl = (t) => {
+    const late = t.due < o.today;
+    const el = h('li', { class: late ? 'late' : '' },
+      h('button.tick', { 'aria-label': `Complete “${t.title}”`, onclick: async () => {
+        el.classList.add('done');
+        try { await post(`/api/tasks/${t.id}/complete`); ctx.refreshNav(); setTimeout(loadDay, 450); }
+        catch (e) { el.classList.remove('done'); fail(e); }
+      } }, icon('check')),
+      h('span.what', t.title, t.starred ? h('span.star', ' ★') : null),
+      h('span.meta', late ? relDay(t.due) : t.countdown ? `${t.countdown}` : t.tags[0] ? `#${t.tags[0]}` : ''));
+    return el;
+  };
+
+  fill(S.yourday,
+    h('header', h('span.kicker', 'Your day'), h('span.rule'),
+      h('span.tally', desk.length ? `${desk.length} on the desk` : 'Clear desk')),
+    h('div.cols',
+      h('div.col',
+        h('h5', 'On your desk'),
+        shown.length ? h('ul.desk', shown.map(taskEl)) : h('p.calm', 'Nothing due today. The page is yours.'),
+        desk.length > shown.length ? h('a.more', { href: '/tasks' }, `+ ${desk.length - shown.length} more in Tasks`) : null),
+      h('div.col',
+        h('h5', 'On the horizon'),
+        horizon.length ? h('ul.horizon-mini', horizon.map((c) => h('li',
+          h('span.n', c.days_until === 0 ? 'Today' : String(c.days_until), c.days_until ? h('small', c.days_until === 1 ? 'day' : 'days') : null),
+          h('span.what', c.title)))) : h('p.calm', 'No dates in the next six weeks.'))),
+    y.count ? h('p.yesterday', h('b', 'Yesterday'), ` you finished ${y.count}: `,
+      y.titles.join(' · '), y.count > y.titles.length ? ` and ${y.count - y.titles.length} more` : '', '.') : null);
 }
 
 async function sendEmail() {

@@ -4,8 +4,10 @@
 //    farthest date), with month ticks, so "twice as far" literally looks twice as long;
 //  · a gentle size/opacity falloff (log time) so near things still loom larger.
 // Vertical spacing between rows also follows the gap in days. Past dates drop into the rear-view.
+// A date can carry a T-minus plan: milestone tasks ("book flights 3 weeks before") that sit on its
+// reach bar as notches and move with it when the date changes.
 
-import { h, icon, get, post, patch, del, toast, fail, sheet, iso, parseISO, today, fmtShort, fmtLong, fmtTime, ago, fill } from './util.js';
+import { h, icon, get, post, patch, del, toast, fail, sheet, iso, parseISO, addDays, today, fmtShort, fmtLong, fmtTime, ago, fill, milestoneLabel } from './util.js';
 
 let S = null;
 const HORIZON_DAYS = 730; // things two years out are at the vanishing point
@@ -22,7 +24,7 @@ export function mount(root) {
   S.timer = setInterval(tick, 1000);
   return {
     unmount() { clearInterval(S.timer); S = null; },
-    onChange(ev) { if (ev.area === 'countdowns' || ev.area === '*') load(); },
+    onChange(ev) { if (['countdowns', 'tasks', '*'].includes(ev.area)) load(); },
     key(e) { if (e.key === 'n') { e.preventDefault(); edit(null); } },
     create: () => edit(null),
   };
@@ -135,11 +137,55 @@ function eventEl(c, scale, gapDays) {
       d === 0 && !c.all_day && Date.now() < target(c) ? h('span.tick', { 'data-at': c.at }) : null,
       c.created_by !== 'you' ? h('span.by-ai', '✦ ', c.created_by) : null),
     c.note ? h('div.note', c.note) : null,
+    planLine(c),
     h('div.reach', { title: `${Math.round(daysLeft(c))} of the ${Math.round(scale.span)} days shown` },
       scale.months.map((m) => h('b', { class: m.date.getMonth() === 0 ? 'yr' : null, style: { left: pct(m.at) } })),
       h('i', { style: { width: pct(reach) } }),
+      (c.milestones || []).filter((m) => m.due).map((m) => {
+        const away = (parseISO(m.due) - Date.now()) / 864e5;
+        return h('u', {
+          class: m.done ? 'done' : away < -1 ? 'late' : '',
+          style: { left: pct(scale.x(Math.max(0, away))) },
+          title: `${milestoneLabel(m.days_before)} · ${m.title}${m.done ? ' (done)' : ''}`,
+        });
+      }),
       h('em', { style: { left: pct(reach) } }))));
   return el;
+}
+
+/** "Plan 2/5 · next: Book flights, in 3 days" under a countdown that has milestones. */
+function planLine(c) {
+  const ms = c.milestones || [];
+  if (!ms.length) return null;
+  const done = ms.filter((m) => m.done).length;
+  const next = ms.find((m) => !m.done);
+  let when = '';
+  if (next?.due) {
+    const n = Math.round((parseISO(next.due) - today()) / 864e5);
+    when = n < 0 ? `${-n}d overdue` : n === 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`;
+  }
+  return h('div.plan-line', { class: next && when.endsWith('overdue') ? 'late' : '' },
+    h('span.count', `Plan ${done}/${ms.length}`),
+    next ? h('span', `next: ${next.title}${when ? ` · ${when}` : ''}`) : h('span', 'all done'));
+}
+
+/** "book flights 3 weeks before" → { title: 'book flights', days: 21 }. `days` is null when no offset was given. */
+function parseStep(text) {
+  const word = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+  const unit = { day: 1, week: 7, month: 30 };
+  let s = ` ${text} `;
+  let days = null;
+  let m;
+  if ((m = s.match(/\bt\s*-\s*(\d{1,4})\b/i))) days = Number(m[1]);
+  else if ((m = s.match(/\b(\d{1,4}|a|an|one|two|three|four|five|six)\s+(day|week|month)s?\s+(before|prior|ahead|early|after|later)\b/i))) {
+    const n = (word[m[1].toLowerCase()] ?? Number(m[1])) * unit[m[2].toLowerCase()];
+    days = /after|later/i.test(m[3]) ? -n : n;
+  } else if ((m = s.match(/\b(?:the\s+)?(day|week|night)\s+(before|after)\b/i))) {
+    const n = m[1].toLowerCase() === 'week' ? 7 : 1;
+    days = m[2].toLowerCase() === 'before' ? n : -n;
+  } else if ((m = s.match(/\b(on\s+the\s+day|day\s+of|same\s+day)\b/i))) days = 0;
+  if (m) s = s.replace(m[0], ' ');
+  return { title: s.replace(/[:–—-]\s*$/, '').replace(/^\s*[:–—-]/, '').replace(/\s+/g, ' ').trim(), days };
 }
 
 function spanLabel(d) {
@@ -174,9 +220,60 @@ function edit(c) {
       preview.textContent = n === 0 ? 'That’s today.' : n > 0 ? `In ${n} day${n === 1 ? '' : 's'} — ${fmtShort(parseISO(date.value))}` : `${-n} days ago`;
     };
     date.addEventListener('input', upd); upd();
+
+    // ── T-minus plan ──
+    // Saved countdowns change their plan immediately; a new one sends its staged steps on save.
+    const steps = c ? [...(c.milestones || [])] : [];
+    const planList = h('ul.plan');
+    const stepIn = h('input.input', { placeholder: 'Add a step — “book flights 3 weeks before”', maxLength: 300, 'aria-label': 'New step' });
+    const daysIn = h('input.input.days', { type: 'number', value: 7, min: -365, max: 3650, 'aria-label': 'Days before' });
+    const stepHint = h('span.muted.step-hint');
+    const dueFor = (n) => (date.value ? addDays(parseISO(date.value), -n) : null);
+    const drawPlan = () => {
+      steps.sort((a, b) => b.days_before - a.days_before);
+      fill(planList, ...steps.map((m) => {
+        const d = dueFor(m.days_before);
+        return h('li', { class: m.done ? 'done' : '' },
+          c && m.id ? h('button.tick', { 'aria-label': m.done ? `Reopen “${m.title}”` : `Complete “${m.title}”`, onclick: async () => {
+            try { await post(`/api/tasks/${m.id}/${m.done ? 'uncomplete' : 'complete'}`); m.done = !m.done; drawPlan(); } catch (e) { fail(e); }
+          } }, icon('check')) : h('span.tick.ghost'),
+          h('span.tm', milestoneLabel(m.days_before)),
+          h('span.what', m.title),
+          h('span.on', d ? fmtShort(d) : ''),
+          h('button.btn.sm.ghost.icon-only', { 'aria-label': `Remove “${m.title}”`, onclick: async () => {
+            try { if (c && m.id) await del(`/api/tasks/${m.id}`); steps.splice(steps.indexOf(m), 1); drawPlan(); } catch (e) { fail(e); }
+          } }, icon('x')));
+      }));
+      const d = dueFor(Number(daysIn.value) || 0);
+      stepHint.textContent = d ? `${milestoneLabel(Number(daysIn.value) || 0)} → ${fmtShort(d)}` : '';
+    };
+    stepIn.addEventListener('input', () => { const p = parseStep(stepIn.value); if (p.days != null) daysIn.value = p.days; drawPlan(); });
+    daysIn.addEventListener('input', drawPlan);
+    date.addEventListener('input', drawPlan);
+    const addStep = async () => {
+      const p = parseStep(stepIn.value);
+      if (!p.title) return stepIn.focus();
+      const days_before = Math.round(Number(daysIn.value) || 0);
+      try {
+        if (c) {
+          const t = await post(`/api/countdowns/${c.id}/milestones`, { title: p.title, days_before });
+          steps.push({ id: t.id, title: t.title, days_before, due: t.due, done: false });
+        } else {
+          steps.push({ title: p.title, days_before });
+        }
+        stepIn.value = '';
+        drawPlan();
+        stepIn.focus();
+      } catch (e) { fail(e); }
+    };
+    stepIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); addStep(); } });
+    daysIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addStep(); } });
+    drawPlan();
+
     const save = async () => {
       if (!title.value.trim() || !date.value) { (title.value.trim() ? date : title).focus(); return; }
       const body = { title: title.value.trim(), date: date.value, time: time.value || null, note: note.value };
+      if (!c && steps.length) body.milestones = steps.map((m) => ({ title: m.title, days_before: m.days_before }));
       try {
         if (c) await patch(`/api/countdowns/${c.id}`, body);
         else await post('/api/countdowns', body);
@@ -190,6 +287,12 @@ function edit(c) {
       h('div.row2', h('label.field', h('span', 'Date'), date), h('label.field', h('span', 'Time (optional)'), time)),
       h('label.field', h('span', 'Note'), note),
       preview,
+      h('div.field.plan-field',
+        h('span', 'Plan ', h('small.muted', '· tasks that count down with it')),
+        planList,
+        h('div.step-add', stepIn, daysIn, h('span.muted.days-label', 'days before'),
+          h('button.btn.sm', { onclick: addStep, 'aria-label': 'Add step' }, icon('plus'))),
+        stepHint),
       h('div.actions',
         c ? h('button.btn.ghost.danger', { onclick: () => { close(); remove(c); } }, icon('trash'), 'Delete') : null,
         h('span.grow'),

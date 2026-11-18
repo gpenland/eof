@@ -5,7 +5,7 @@
 
 import {
   h, icon, get, post, patch, del, toast, fail, menu, sheet, debounce, autosize, store, $, $$,
-  iso, parseISO, addDays, today, dayDiff, relDay, fmtShort, fmtLong, fmtWd, ago, fill,
+  iso, parseISO, addDays, today, dayDiff, relDay, fmtShort, fmtLong, fmtWd, ago, fill, milestoneLabel,
 } from './util.js';
 import { ctx } from './app.js';
 import { parse } from './quickadd.js';
@@ -347,6 +347,8 @@ function row(t, groupKey) {
     h('div.title', t.title),
     h('div.sub',
       dueChip(t, groupKey),
+      t.countdown_title ? h('a.milepill', { href: '/countdown', title: `Part of the plan for ${t.countdown_title}` },
+        icon('hourglass'), t.countdown_title, h('span', milestoneLabel(t.days_before))) : null,
       t.tags.map((g) => h('span.tagpill', `#${g}`)),
       // Provenance stays quiet in the list (a ✦ with a tooltip); the editor names the author.
       t.created_by !== 'you' ? h('span.spark', { title: `Added by ${t.created_by}`, 'aria-label': `Added by ${t.created_by}` }, '✦') : null,
