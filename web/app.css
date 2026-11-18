@@ -438,7 +438,7 @@ article.issue.sans .prose { font-family: var(--sans); }
 .prose code { font: .85em var(--mono); background: var(--sunk); padding: 1px 5px; border-radius: 5px; }
 .prose table { width: 100%; border-collapse: collapse; font: 14px/1.4 var(--sans); margin: 1.4em 0; }
 .prose th, .prose td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-.prose > p:first-of-type::first-letter { float: left; font: 600 3.3em/.8 var(--serif); padding: .08em .1em 0 0; color: var(--ink); }
+.prose > p.dropcap::first-letter { float: left; font: 600 3.3em/.8 var(--serif); padding: .08em .1em 0 0; color: var(--ink); }
 .endmark { text-align: center; margin: 56px 0 24px; color: var(--ink-3); }
 .endmark .eof { font: 600 13px var(--mono); letter-spacing: .3em; color: var(--ink-2); display: inline-flex; align-items: center; gap: 10px; }
 .endmark .eof::before { content: ""; width: 9px; height: 9px; background: var(--accent); }

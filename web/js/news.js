@@ -99,6 +99,9 @@ function renderIssue() {
   const prose = h('div.prose', { html: i.html }); // sanitized server-side by ammonia
   // Section anchors + external links open in a new tab.
   $$('h2', prose).forEach((el, n) => { el.id = `s${n + 1}`; });
+  // Drop cap only on a real opening paragraph; a short line like "Today" lets the float spill into the list below.
+  const lead = $('p', prose);
+  if (lead && lead.parentElement === prose && lead.textContent.trim().length > 140) lead.classList.add('dropcap');
   $$('a[href^="http"]', prose).forEach((a) => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
 
   const end = h('div.endmark', h('div.eof', 'EOF'), h('p', i.read_at ? 'You read this edition.' : 'That’s the edition. You’re caught up.'));
