@@ -468,11 +468,11 @@ article.issue.sans .prose { font-family: var(--sans); }
 
 /* ── Settings ──────────────────────────────────────────────────────────── */
 
-.settings { max-width: 680px; margin: 0 auto; display: grid; gap: 28px; }
+.settings { max-width: 680px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 20px; }
 .card h2 { margin: 0 0 4px; font: 600 18px var(--serif); }
 .card > p.lead { margin: 0 0 16px; color: var(--ink-3); font-size: 14px; }
-.rows { display: grid; }
+.rows { display: grid; grid-template-columns: minmax(0, 1fr); }
 .rows .r { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
 .rows .r:first-child { border-top: 0; }
 .rows .r .grow { flex: 1; min-width: 0; }
@@ -480,8 +480,8 @@ article.issue.sans .prose { font-family: var(--sans); }
 .rows .r .s { font-size: 12.5px; color: var(--ink-3); }
 .badge { font-size: 11px; padding: 2px 7px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .copy { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-radius: 10px; background: var(--sunk); font: 13px var(--mono); }
-.copy code { flex: 1; overflow: auto; white-space: nowrap; scrollbar-width: none; }
-.howto { display: grid; gap: 12px; margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+.copy code { flex: 1; min-width: 0; overflow: auto; white-space: nowrap; scrollbar-width: none; }
+.howto { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 14px; font-size: 14px; color: var(--ink-2); }
 .howto ol { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; }
 .secret { border: 1px dashed var(--accent); background: var(--accent-soft); border-radius: 12px; padding: 14px; display: grid; gap: 8px; font-size: 13px; }
 
