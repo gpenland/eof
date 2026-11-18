@@ -31,6 +31,9 @@ pub struct CountdownView {
     pub time: Option<String>,
     /// Whole calendar days from today; 0 = today, negative = in the past.
     pub days_until: i64,
+    /// The countdown's T-minus plan (tasks scheduled relative to it). Filled by `milestones::attach`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub milestones: Vec<super::milestones::Milestone>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +44,9 @@ pub struct NewCountdown {
     pub time: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
+    /// Optional T-minus plan created along with the countdown.
+    #[serde(default)]
+    pub milestones: Vec<super::milestones::NewMilestone>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -73,7 +79,7 @@ fn to_instant(tz: Tz, date: NaiveDate, time: Option<&str>) -> AppResult<(DateTim
 }
 
 /// Local calendar date of an event (all-day dates are timezone-free).
-fn local_date(c: &Countdown, tz: Tz) -> NaiveDate {
+pub fn local_date(c: &Countdown, tz: Tz) -> NaiveDate {
     if c.all_day { c.at.date_naive() } else { c.at.with_timezone(&tz).date_naive() }
 }
 
@@ -82,7 +88,7 @@ pub fn view(c: Countdown, tz: Tz, today: NaiveDate) -> CountdownView {
     let date = local_date(&c, tz);
     let time = (!c.all_day).then(|| local.format("%H:%M").to_string());
     let days_until = (date - today).num_days();
-    CountdownView { c, date, time, days_until }
+    CountdownView { c, date, time, days_until, milestones: Vec::new() }
 }
 
 pub async fn list(db: &PgPool, include_past: bool) -> AppResult<Vec<Countdown>> {

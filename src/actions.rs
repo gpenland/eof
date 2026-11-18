@@ -6,10 +6,11 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    domain::{self, countdowns, news, tasks},
+    domain::{self, countdowns, milestones, news, quickadd, tasks},
     email,
     error::{AppError, AppResult},
     events::{Actor, emit},
+    push,
     state::AppState,
 };
 
@@ -27,7 +28,12 @@ pub async fn create_task(st: &AppState, a: &Actor, input: tasks::NewTask) -> App
 
 pub async fn update_task(st: &AppState, a: &Actor, id: Uuid, p: tasks::TaskPatch) -> AppResult<tasks::Task> {
     let today = domain::today(&st.db).await;
-    let t = tasks::update(&st.db, id, p, today).await?;
+    let due_changed = p.due.is_some();
+    let mut t = tasks::update(&st.db, id, p, today).await?;
+    if due_changed && t.countdown_id.is_some() {
+        milestones::rebase(&st.db, domain::timezone(&st.db).await, &t).await?;
+        t = tasks::get(&st.db, id).await?;
+    }
     emit(st, "tasks", a, format!("edited {}", quote(&t.title)));
     Ok(t)
 }
@@ -44,6 +50,25 @@ pub async fn complete_task(st: &AppState, a: &Actor, id: Uuid) -> AppResult<Valu
             json!({ "task": task, "rolled_to": next })
         }
     })
+}
+
+/// Add a task from one sentence ("call dentist fri #health !"), parsed like the web composer.
+pub async fn quick_add(st: &AppState, a: &Actor, text: &str, list_id: Option<Uuid>) -> AppResult<tasks::Task> {
+    let today = domain::today(&st.db).await;
+    let p = quickadd::parse(text, today);
+    if p.title.is_empty() {
+        return Err(AppError::bad("that's all date and tags — what's the task?"));
+    }
+    let input = tasks::NewTask {
+        list_id,
+        title: p.title,
+        tags: Some(p.tags),
+        due: p.due,
+        repeat: p.repeat.map(String::from),
+        starred: Some(p.starred),
+        notes: None,
+    };
+    create_task(st, a, input).await
 }
 
 pub async fn uncomplete_task(st: &AppState, a: &Actor, id: Uuid) -> AppResult<tasks::Task> {
@@ -88,11 +113,35 @@ pub async fn delete_list(st: &AppState, a: &Actor, id: Uuid) -> AppResult<()> {
     Ok(())
 }
 
-pub async fn create_countdown(st: &AppState, a: &Actor, input: countdowns::NewCountdown) -> AppResult<countdowns::CountdownView> {
+pub async fn create_countdown(st: &AppState, a: &Actor, mut input: countdowns::NewCountdown) -> AppResult<countdowns::CountdownView> {
     let tz = domain::timezone(&st.db).await;
+    let plan = std::mem::take(&mut input.milestones);
+    for m in &plan {
+        tasks::check_title(&m.title)?;
+    }
     let c = countdowns::create(&st.db, tz, input, a).await?;
+    for m in plan {
+        milestones::add(&st.db, tz, c.id, m, a).await?;
+    }
     emit(st, "countdowns", a, format!("added countdown {}", quote(&c.title)));
-    Ok(countdowns::view(c, tz, domain::today(&st.db).await))
+    let mut v = [countdowns::view(c, tz, domain::today(&st.db).await)];
+    milestones::attach(&st.db, &mut v).await?;
+    let [v] = v;
+    Ok(v)
+}
+
+/// Add a step to a countdown's T-minus plan: a task due `days_before` days ahead of it.
+pub async fn add_milestone(st: &AppState, a: &Actor, countdown_id: Uuid, m: milestones::NewMilestone) -> AppResult<tasks::Task> {
+    let tz = domain::timezone(&st.db).await;
+    let t = milestones::add(&st.db, tz, countdown_id, m, a).await?;
+    let c = countdowns::get(&st.db, countdown_id).await?;
+    let when = match t.days_before.unwrap_or(0) {
+        0 => "on the day".to_string(),
+        n if n > 0 => format!("T-{n}"),
+        n => format!("{} after", -n),
+    };
+    emit(st, "tasks", a, format!("planned {} for {} ({when})", quote(&t.title), quote(&c.title)));
+    Ok(t)
 }
 
 pub async fn update_countdown(
@@ -103,8 +152,16 @@ pub async fn update_countdown(
 ) -> AppResult<countdowns::CountdownView> {
     let tz = domain::timezone(&st.db).await;
     let c = countdowns::update(&st.db, tz, id, p).await?;
-    emit(st, "countdowns", a, format!("edited countdown {}", quote(&c.title)));
-    Ok(countdowns::view(c, tz, domain::today(&st.db).await))
+    let moved = milestones::follow(&st.db, tz, &c).await?;
+    let also = if moved > 0 { format!(" — moved {moved} planned task{}", if moved == 1 { "" } else { "s" }) } else { String::new() };
+    emit(st, "countdowns", a, format!("edited countdown {}{also}", quote(&c.title)));
+    if moved > 0 {
+        emit(st, "tasks", a, format!("rescheduled the plan for {}", quote(&c.title)));
+    }
+    let mut v = [countdowns::view(c, tz, domain::today(&st.db).await)];
+    milestones::attach(&st.db, &mut v).await?;
+    let [v] = v;
+    Ok(v)
 }
 
 pub async fn delete_countdown(st: &AppState, a: &Actor, id: Uuid) -> AppResult<()> {
@@ -128,8 +185,13 @@ pub async fn publish_issue(
     emit(st, "news", a, format!("published {} ({})", quote(&i.title), i.edition.format("%b %-d")));
     // Today's edition is emailed once, on first publish. It runs in the background so a slow or
     // failing mail provider never holds up (or fails) the publish; the outcome arrives as an event.
-    if st.mailer.is_some() && i.edition == domain::today(&st.db).await {
+    let is_today = i.edition == domain::today(&st.db).await;
+    if st.mailer.is_some() && is_today {
         tokio::spawn(auto_email(st.clone(), a.clone(), i.edition));
+    }
+    // Announce today's edition on devices with notifications on — once, like the email.
+    if is_today && let Some(title) = news::claim_push(&st.db, i.edition).await? {
+        push::spawn_send(st, push::Note { title: "Today’s edition is in".into(), body: title, url: "/news".into(), tag: "edition".into() });
     }
     Ok(i)
 }
@@ -185,7 +247,7 @@ pub async fn overview(st: &AppState) -> AppResult<Value> {
     let pick = |f: &dyn Fn(NaiveDate) -> bool| -> Vec<Value> {
         open.iter()
             .filter(|t| t.due.map(f).unwrap_or(false))
-            .map(|t| json!({ "id": t.id, "title": t.title, "due": t.due, "tags": t.tags, "starred": t.starred }))
+            .map(|t| json!({ "id": t.id, "title": t.title, "due": t.due, "tags": t.tags, "starred": t.starred, "countdown": t.countdown_title }))
             .collect()
     };
     let overdue = pick(&|d| d < today);
@@ -198,10 +260,19 @@ pub async fn overview(st: &AppState) -> AppResult<Value> {
         .map(|c| countdowns::view(c, tz, today))
         .collect();
     let latest = news::list(db, 1).await?.into_iter().next();
+    // What got finished yesterday (owner's calendar day), for the morning recap.
+    let finished: Vec<String> = sqlx::query_scalar(
+        "SELECT title FROM tasks WHERE completed_at IS NOT NULL AND (completed_at AT TIME ZONE $1)::date = $2 ORDER BY completed_at",
+    )
+    .bind(tz.name())
+    .bind(today - chrono::Duration::days(1))
+    .fetch_all(db)
+    .await?;
     Ok(json!({
         "today": today,
         "timezone": tz.name(),
         "tasks": { "overdue": overdue, "today": due_today, "next_7_days": this_week },
+        "done_yesterday": { "count": finished.len(), "titles": finished.iter().take(6).collect::<Vec<_>>() },
         "countdowns": cds,
         "latest_issue": latest.map(|i| json!({ "edition": i.edition, "title": i.title, "read": i.read, "is_today": i.edition == today })),
     }))

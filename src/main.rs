@@ -7,6 +7,7 @@
 mod actions;
 mod api;
 mod auth;
+mod capture;
 mod config;
 mod domain;
 mod email;
@@ -14,6 +15,7 @@ mod error;
 mod events;
 mod mcp;
 mod oauth;
+mod push;
 mod security;
 mod state;
 mod web;
@@ -48,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
     }
     auth::announce_setup(&state).await?;
     state::spawn_janitor(state.clone());
+    push::spawn_scheduler(state.clone());
 
     let app = web::router(state);
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.port));

@@ -540,3 +540,82 @@ article.issue.sans .prose { font-family: var(--sans); }
   .event .num small { display: inline; margin: 0; text-align: left; }
   .event .title { font-size: calc(16px + 12px * var(--s)); }
 }
+
+/* ── Front page: "Your day" on today's edition ─────────────────────────────── */
+.yourday { margin: -6px 0 38px; padding: 16px 18px 14px; border: 1px solid var(--ink); border-radius: 2px; font: 14px/1.45 var(--sans); position: relative; }
+.yourday::before { content: ""; position: absolute; inset: 3px; border: 1px solid var(--line); pointer-events: none; }
+.yourday:empty { display: none; }
+.yourday header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.yourday .kicker { font: 700 11px/1 var(--sans); letter-spacing: .2em; text-transform: uppercase; }
+.yourday .rule { flex: 1; height: 1px; background: var(--line-2); }
+.yourday .tally { font: 12px/1 var(--mono); color: var(--ink-3); }
+.yourday .cols { display: grid; grid-template-columns: 1.5fr 1fr; gap: 0 22px; }
+.yourday .col + .col { border-left: 1px solid var(--line); padding-left: 22px; }
+.yourday h5 { margin: 0 0 6px; font: 600 10.5px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+.yourday ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.yourday .desk li { display: flex; align-items: center; gap: 9px; padding: 4px 0; transition: opacity .3s; }
+.yourday .desk li .what { flex: 1; min-width: 0; font: 15px/1.35 var(--serif); }
+.yourday .desk li .star { color: var(--star); }
+.yourday .desk li .meta { font: 11.5px var(--mono); color: var(--ink-3); white-space: nowrap; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.yourday .desk li.late .meta { color: var(--late); }
+.yourday .desk li.done { opacity: .35; }
+.yourday .desk li.done .what { text-decoration: line-through; }
+.yourday .tick { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--line-2); display: grid; place-items: center; padding: 0; background: none; cursor: pointer; }
+.yourday .tick .icon { width: 10px; height: 10px; stroke-width: 3; opacity: 0; color: var(--accent); }
+.yourday .tick:hover { border-color: var(--accent); }
+.yourday .tick:hover .icon { opacity: .6; }
+.yourday li.done .tick { background: var(--accent); border-color: var(--accent); }
+.yourday li.done .tick .icon { opacity: 1; color: var(--accent-ink); }
+.yourday .horizon-mini li { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+.yourday .horizon-mini .n { flex: none; min-width: 3ch; display: grid; justify-items: center; font: 600 22px/1 var(--serif); font-variant-numeric: lining-nums tabular-nums; }
+.yourday .horizon-mini .n small { margin-top: 2px; font: 400 9.5px/1 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.yourday .horizon-mini .what { font: 14px/1.3 var(--serif); }
+.yourday .calm { margin: 4px 0; color: var(--ink-3); font: italic 14.5px/1.4 var(--serif); }
+.yourday .more { display: inline-block; margin-top: 4px; font-size: 12.5px; color: var(--accent); text-decoration: none; }
+.yourday .yesterday { margin: 12px 0 0; padding-top: 10px; border-top: 1px dotted var(--line-2); font: 13.5px/1.45 var(--serif); color: var(--ink-2); }
+.yourday .yesterday b { font: 600 10.5px var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); margin-right: 4px; }
+@media (max-width: 760px) {
+  .yourday .cols { grid-template-columns: 1fr; gap: 14px; }
+  .yourday .col + .col { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 12px; }
+}
+
+/* ── Countdown milestones ──────────────────────────────────────────────────── */
+/* Milestone notches ride on the reach bar: open ones in accent, done ones dimmed, late ones warm. */
+.event .reach u { position: absolute; z-index: 1; top: -2px; width: 3px; height: 13px; margin-left: -1.5px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 2px var(--bg); text-decoration: none; }
+.event:hover .reach u { box-shadow: 0 0 0 2px var(--surface); }
+.event .reach u.done { background: var(--ink-3); height: 7px; top: 1px; }
+.event .reach u.late { background: var(--late); }
+.event .plan-line { margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; font: 12px/1.3 var(--mono); color: var(--ink-2); }
+.event .plan-line .count { color: var(--ink-3); }
+.event .plan-line.late span:last-child { color: var(--late); }
+.plan-field .plan { list-style: none; margin: 0; padding: 0; display: grid; }
+.plan-field .plan:empty { display: none; }
+.plan li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.plan li:first-child { border-top: 0; }
+.plan li .tm { font: 600 11.5px var(--mono); color: var(--accent); min-width: 6.5ch; white-space: nowrap; }
+.plan li .what { flex: 1; min-width: 0; }
+.plan li .on { font: 12px var(--mono); color: var(--ink-3); }
+.plan li.done .what { text-decoration: line-through; color: var(--ink-3); }
+.plan .tick { flex: none; width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--line-2); display: grid; place-items: center; padding: 0; background: none; cursor: pointer; }
+.plan .tick.ghost { border-style: dashed; cursor: default; }
+.plan .tick .icon { width: 10px; height: 10px; stroke-width: 3; opacity: 0; color: var(--accent-ink); }
+.plan li.done .tick { background: var(--accent); border-color: var(--accent); }
+.plan li.done .tick .icon { opacity: 1; }
+.step-add { display: flex; align-items: center; gap: 8px; }
+.step-add > .input:first-child { flex: 1; min-width: 0; }
+.step-add .days { width: 72px; flex: none; }
+.step-add .days-label { font-size: 12px; white-space: nowrap; }
+.step-hint { font: 12px var(--mono); min-height: 1em; }
+.milepill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-2); text-decoration: none; padding: 1px 7px 1px 5px; border-radius: 999px; background: var(--sunk); }
+.milepill .icon { width: 11px; height: 11px; }
+.milepill span { font: 11px var(--mono); color: var(--accent); }
+.milepill:hover { color: var(--ink); }
+
+/* ── Settings: notifications & capture ─────────────────────────────────────── */
+.notify-here { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.install-hint { border: 1px dashed var(--line-2); border-radius: 12px; padding: 12px 14px; font-size: 14px; color: var(--ink-2); }
+.install-hint ol { margin: 6px 0 0; padding-left: 1.2em; display: grid; gap: 2px; }
+.ctrl-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 14px; color: var(--ink-2); }
+.ctrl-row .icon { color: var(--ink-3); }
+ol.steps { margin: 14px 0 0; padding-left: 1.3em; display: grid; gap: 8px; font-size: 14px; color: var(--ink-2); }
+ol.steps code { font: 12.5px var(--mono); background: var(--sunk); padding: 1px 5px; border-radius: 5px; }

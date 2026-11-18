@@ -13,10 +13,10 @@ use uuid::Uuid;
 use crate::{
     actions,
     auth::{self, Owner},
-    domain::{self, countdowns, news, tasks},
+    domain::{self, countdowns, milestones, news, tasks},
     error::{AppError, AppResult},
     events::{self, Actor},
-    oauth,
+    oauth, push,
     state::AppState,
 };
 
@@ -43,6 +43,13 @@ pub fn router() -> Router<AppState> {
         .route("/tags", get(tags))
         .route("/countdowns", get(list_countdowns).post(create_countdown))
         .route("/countdowns/{id}", patch(update_countdown).delete(delete_countdown))
+        .route("/countdowns/{id}/milestones", post(add_milestone))
+        .route("/push", get(push_status))
+        .route("/push/subscribe", post(push_subscribe))
+        .route("/push/unsubscribe", post(push_unsubscribe))
+        .route("/push/test", post(push_test))
+        .route("/push/digest", put(push_digest))
+        .route("/push/{id}", axum::routing::delete(push_remove))
         .route("/issues", get(list_issues).post(publish_issue))
         .route("/issues/{which}", get(get_issue).delete(delete_issue))
         .route("/issues/{edition}/read", put(set_read))
@@ -164,8 +171,13 @@ struct PastQ {
 async fn list_countdowns(State(st): State<AppState>, _o: Owner, Query(q): Query<PastQ>) -> J {
     let tz = domain::timezone(&st.db).await;
     let today = domain::today(&st.db).await;
-    let v: Vec<_> = countdowns::list(&st.db, q.include_past).await?.into_iter().map(|c| countdowns::view(c, tz, today)).collect();
+    let mut v: Vec<_> = countdowns::list(&st.db, q.include_past).await?.into_iter().map(|c| countdowns::view(c, tz, today)).collect();
+    milestones::attach(&st.db, &mut v).await?;
     Ok(Json(json!(v)))
+}
+
+async fn add_milestone(State(st): State<AppState>, _o: Owner, Path(id): Path<Uuid>, Json(b): Json<milestones::NewMilestone>) -> J {
+    Ok(Json(json!(actions::add_milestone(&st, &Actor::you(), id, b).await?)))
 }
 
 async fn create_countdown(State(st): State<AppState>, _o: Owner, Json(b): Json<countdowns::NewCountdown>) -> J {
@@ -232,5 +244,56 @@ async fn email_issue(State(st): State<AppState>, _o: Owner, Path(ed): Path<Strin
 
 async fn delete_issue(State(st): State<AppState>, _o: Owner, Path(ed): Path<String>) -> J {
     actions::delete_issue(&st, &Actor::you(), edition(&ed)?).await?;
+    ok()
+}
+
+// ── Notifications ──
+
+async fn push_status(State(st): State<AppState>, _o: Owner) -> J {
+    let key = push::vapid_key(&st.db).await?;
+    Ok(Json(json!({
+        "public_key": push::public_key_b64(&key),
+        "devices": push::devices(&st.db).await?,
+        "digest_hour": push::digest_hour(&st.db).await,
+    })))
+}
+
+async fn push_subscribe(State(st): State<AppState>, _o: Owner, Json(b): Json<push::Subscription>) -> J {
+    let d = push::subscribe(&st.db, b).await?;
+    events::emit(&st, "settings", &Actor::you(), format!("turned on notifications for {}", d.label));
+    Ok(Json(json!(d)))
+}
+
+#[derive(Deserialize)]
+struct Endpoint {
+    endpoint: String,
+}
+
+async fn push_unsubscribe(State(st): State<AppState>, _o: Owner, Json(b): Json<Endpoint>) -> J {
+    push::remove(&st.db, &b.endpoint).await?;
+    ok()
+}
+
+async fn push_remove(State(st): State<AppState>, _o: Owner, Path(id): Path<String>) -> J {
+    push::remove(&st.db, &id).await?;
+    ok()
+}
+
+async fn push_test(State(st): State<AppState>, _o: Owner) -> J {
+    let note = match push::digest(&st).await? {
+        Some(n) => push::Note { tag: "test".into(), ..n },
+        None => push::Note { title: "EOF".into(), body: "Notifications are on. Nothing due — enjoy it.".into(), url: "/tasks".into(), tag: "test".into() },
+    };
+    let sent = push::send(&st, &note).await?;
+    Ok(Json(json!({ "sent": sent })))
+}
+
+#[derive(Deserialize)]
+struct DigestBody {
+    hour: Option<u32>,
+}
+
+async fn push_digest(State(st): State<AppState>, _o: Owner, Json(b): Json<DigestBody>) -> J {
+    push::set_digest_hour(&st.db, b.hour).await?;
     ok()
 }

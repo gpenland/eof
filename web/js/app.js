@@ -104,6 +104,14 @@ function teardown() {
   feed = null;
 }
 
+// Installable app + notifications. A tapped notification asks an open window to route there.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type === 'navigate' && typeof e.data.path === 'string' && e.data.path.startsWith('/')) navigate(e.data.path);
+  });
+}
+
 async function boot() {
   ctx.boot = await get('/api/bootstrap');
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;

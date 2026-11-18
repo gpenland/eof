@@ -2,7 +2,9 @@
 //! which is how "anything you can do in the UI, an AI can do too" stays true by construction.
 
 pub mod countdowns;
+pub mod milestones;
 pub mod news;
+pub mod quickadd;
 pub mod tasks;
 
 use chrono::{NaiveDate, Utc};

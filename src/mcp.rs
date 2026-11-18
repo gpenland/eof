@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     actions,
-    domain::{self, countdowns, news, tasks},
+    domain::{self, countdowns, milestones, news, tasks},
     error::{AppError, AppResult},
     events::Actor,
     oauth::Machine,
@@ -27,7 +27,7 @@ const PROTOCOLS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11
 const INSTRUCTIONS: &str = "EOF is the user's personal productivity app: a todo list, \
 a countdown of upcoming dates, and a daily news edition. Start with get_overview to see what's due. \
 Dates are YYYY-MM-DD in the user's timezone (\"today\", \"tomorrow\" and weekday names also work). \
-Tags are lowercase words without '#'. To deliver the daily news, call publish_issue with plain Markdown: \
+Tags are lowercase words without '#'. Countdowns can carry a T-minus plan of tasks (milestones) that move with the date. To deliver the daily news, call publish_issue with plain Markdown: \
 '## Section' headings, short paragraphs and bullet lists, links inline; no images.";
 
 pub async fn get_not_allowed() -> impl IntoResponse {
@@ -206,6 +206,7 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
             };
             brief(actions::create_task(st, actor, input).await?)
         }
+        "quick_add" => brief(actions::quick_add(st, actor, &req_s(a, "text")?, opt_uuid(a, "list_id")?).await?),
         "update_task" => {
             let today = domain::today(db).await;
             let due = match tri(a, "due") {
@@ -252,7 +253,8 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
             let tz = domain::timezone(db).await;
             let today = domain::today(db).await;
             let past = a.get("include_past").and_then(Value::as_bool).unwrap_or(false);
-            let v: Vec<_> = countdowns::list(db, past).await?.into_iter().map(|c| countdowns::view(c, tz, today)).collect();
+            let mut v: Vec<_> = countdowns::list(db, past).await?.into_iter().map(|c| countdowns::view(c, tz, today)).collect();
+            milestones::attach(db, &mut v).await?;
             json!({ "countdowns": v })
         }
         "create_countdown" => {
@@ -261,8 +263,19 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
                 date: date(st, a, "date").await?.ok_or_else(|| AppError::bad("`date` is required"))?,
                 time: s(a, "time").filter(|t| !t.is_empty()),
                 note: s(a, "note"),
+                milestones: match a.get("milestones") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(v) => serde_json::from_value(v.clone())
+                        .map_err(|_| AppError::bad("`milestones` must be a list of {title, days_before}"))?,
+                },
             };
-            brief(actions::create_countdown(st, actor, input).await?)
+            let v = actions::create_countdown(st, actor, input).await?;
+            let plan: Vec<Value> = v.milestones.iter().map(|m| json!({ "id": m.id, "title": m.title, "due": m.due })).collect();
+            let mut out = brief(&v);
+            if !plan.is_empty() {
+                out["milestones"] = json!(plan);
+            }
+            out
         }
         "update_countdown" => {
             let p = countdowns::CountdownPatch {
@@ -272,6 +285,11 @@ async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<
                 note: s(a, "note"),
             };
             brief(actions::update_countdown(st, actor, uuid(a, "id")?, p).await?)
+        }
+        "add_milestone" => {
+            let days_before = a.get("days_before").and_then(Value::as_i64).ok_or_else(|| AppError::bad("`days_before` is required"))?;
+            let m = milestones::NewMilestone { title: req_s(a, "title")?, days_before: days_before.clamp(-10_000, 10_000) as i32 };
+            brief(actions::add_milestone(st, actor, uuid(a, "countdown_id")?, m).await?)
         }
         "delete_countdown" => {
             actions::delete_countdown(st, actor, uuid(a, "id")?).await?;
@@ -363,6 +381,10 @@ fn tool_list() -> Vec<Value> {
             "starred": { "type": "boolean" },
             "list_id": { "type": "string", "description": "Defaults to the first list" },
         }), &["title"], false, false),
+        tool("quick_add", "Quick add task", "Add a task from one natural sentence, parsed exactly like the user's own composer: dates ('fri', 'tomorrow', 'next week', 'in 3 days', 'dec 5', '12/5'), repeats ('every monday', 'daily'), '#tags' and a trailing '!' to star. E.g. \"Quiz 4 fri #cs2110 !\". Prefer create_task when you already have structured fields.", json!({
+            "text": { "type": "string" },
+            "list_id": { "type": "string", "description": "Defaults to the first list" },
+        }), &["text"], false, false),
         tool("update_task", "Edit task", "Change any fields of a task. Pass null for due or repeat to clear them.", json!({
             "id": id,
             "title": { "type": "string" },
@@ -394,11 +416,21 @@ fn tool_list() -> Vec<Value> {
             "date": date("YYYY-MM-DD"),
             "time": { "type": "string", "description": "Optional local time HH:MM (24h). Omit for all-day." },
             "note": { "type": "string" },
+            "milestones": { "type": "array", "description": "Optional T-minus plan: tasks due a number of days before the date. They move with the countdown.",
+                "items": { "type": "object", "properties": {
+                    "title": { "type": "string" },
+                    "days_before": { "type": "integer", "description": "0 = on the day; negative = after it" },
+                }, "required": ["title", "days_before"], "additionalProperties": false } },
         }), &["title", "date"], false, false),
         tool("update_countdown", "Edit countdown", "Change a countdown. Pass time: null to make it all-day.", json!({
             "id": { "type": "string" }, "title": { "type": "string" }, "date": date("YYYY-MM-DD"),
             "time": { "type": ["string", "null"] }, "note": { "type": "string" },
         }), &["id"], false, false),
+        tool("add_milestone", "Plan a countdown step", "Add a step to a countdown's T-minus plan: a task due `days_before` days ahead of it (e.g. book flights 21 days before a trip). It appears in Tasks and moves when the countdown's date changes.", json!({
+            "countdown_id": { "type": "string", "description": "From list_countdowns" },
+            "title": { "type": "string" },
+            "days_before": { "type": "integer", "description": "0 = on the day; negative = after it" },
+        }), &["countdown_id", "title", "days_before"], false, false),
         tool("delete_countdown", "Delete countdown", "Remove a countdown.", json!({ "id": { "type": "string" } }), &["id"], false, true),
 
         tool("publish_issue", "Publish news issue", "Publish the daily news edition. Plain Markdown: optional '# Title' first line, then '## Section' headings, short paragraphs, bullets and inline links; no images. One issue per date — publishing the same date again replaces it. Today's edition is emailed to the user the first time it's published (corrections via republish are not re-sent; use email_issue for that).", json!({

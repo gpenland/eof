@@ -200,6 +200,14 @@ pub async fn release_email(db: &PgPool, edition: NaiveDate) -> AppResult<()> {
     Ok(())
 }
 
+/// Like `claim_email`, for the push announcement: `Some(title)` only the first time.
+pub async fn claim_push(db: &PgPool, edition: NaiveDate) -> AppResult<Option<String>> {
+    Ok(sqlx::query_scalar("UPDATE issues SET pushed_at = now() WHERE edition = $1 AND pushed_at IS NULL RETURNING title")
+        .bind(edition)
+        .fetch_optional(db)
+        .await?)
+}
+
 pub async fn mark_emailed(db: &PgPool, edition: NaiveDate) -> AppResult<Issue> {
     sqlx::query_as("UPDATE issues SET emailed_at = now() WHERE edition = $1 RETURNING *")
         .bind(edition)
