@@ -311,8 +311,24 @@ function dueChip(t, groupKey) {
   const n = dayDiff(parseISO(t.due), today());
   const show = groupKey === 'custom' || groupKey === 'done' || groupKey === 'past' || n === 0 || t.repeat || groupKey === 'none';
   if (!show) return t.repeat ? h('span.due', icon('repeat')) : null;
-  return h('span.due', { class: n < 0 && !t.completed_at ? 'past' : n === 0 ? 'today' : '', title: REPEAT_LABEL[t.repeat] || '' },
-    icon('clock'), relDay(t.due), t.repeat ? icon('repeat') : null);
+  const cls = n < 0 && !t.completed_at ? 'past' : n === 0 ? 'today' : '';
+  if (t.completed_at) {
+    return h('span.due', { class: cls, title: REPEAT_LABEL[t.repeat] || '' }, icon('clock'), relDay(t.due), t.repeat ? icon('repeat') : null);
+  }
+  // Clickable: opens the native date picker and saves the new due date.
+  const input = h('input.due-input', { type: 'date', value: t.due, tabIndex: -1, 'aria-hidden': 'true' });
+  input.addEventListener('change', async () => {
+    if (!input.value || input.value === t.due) return;
+    try {
+      const nt = await patch(`/api/tasks/${t.id}`, { due: input.value });
+      Object.assign(t, nt);
+      renderAll();
+    } catch (e) { fail(e); }
+  });
+  return h('button.due.pick', {
+    class: cls, title: [REPEAT_LABEL[t.repeat], 'Change due date'].filter(Boolean).join(' · '), 'aria-label': `Due ${relDay(t.due)}. Change date`,
+    onclick: (e) => { e.stopPropagation(); try { input.showPicker(); } catch { input.focus(); input.click(); } },
+  }, icon('clock'), relDay(t.due), t.repeat ? icon('repeat') : null, input);
 }
 
 function row(t, groupKey) {
