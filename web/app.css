@@ -161,6 +161,10 @@ textarea.input { resize: none; line-height: 1.5; }
 .menu .label { color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; padding-top: 6px; }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 4px; }
 .menu .check { margin-left: auto; color: var(--accent); }
+.tagsug { min-width: 160px; max-width: min(320px, calc(100vw - 32px)); animation-duration: .1s; }
+.tagsug button { gap: 2px; padding: 6px 10px; }
+.tagsug .hash { color: var(--accent); }
+.tagsug small { margin-left: auto; padding-left: 14px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
 
 /* ── Toasts ────────────────────────────────────────────────────────────── */
