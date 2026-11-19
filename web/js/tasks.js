@@ -22,6 +22,7 @@ export function mount(root) {
     sort: store.get('sort', 'date'),
     tag: null, day: null,
     open: [], done: [],
+    tags: [],
     showDone: false, openId: null, focusId: null,
     ignored: new Set(), deferred: false, dragging: false,
   };
@@ -57,13 +58,14 @@ function refresh() {
 
 async function load() {
   try {
-    const [open, done, lists] = await Promise.all([
+    const [open, done, lists, tags] = await Promise.all([
       get(`/api/tasks?status=open&list_id=${S.listId}`),
       get(`/api/tasks?status=completed&limit=60&list_id=${S.listId}`),
       get('/api/lists'),
+      get('/api/tags'),
     ]);
     if (!S) return;
-    Object.assign(S, { open, done, lists });
+    Object.assign(S, { open, done, lists, tags });
     ctx.boot.lists = lists;
     renderHead();
     renderAll();
@@ -152,7 +154,23 @@ function buildComposer() {
         onclick: () => { S.ignored.add(c.token); update(); input.focus(); } }, icon('x')))));
     return p;
   };
-  input.addEventListener('input', update);
+  // "#cs" at the caret → suggest existing tags; accepting rewrites the token to "#cs2110 ".
+  const tagAt = () => input.value.slice(0, input.selectionStart ?? input.value.length).match(/(^|\s)#([\p{L}\p{N}_-]*)$/u);
+  const sug = tagSuggest(input, box, {
+    query: () => { const m = tagAt(); return m ? m[2] : null; },
+    exclude: () => parse(input.value, S.ignored).tags,
+    pick: (tag) => {
+      const m = tagAt(); if (!m) return;
+      const end = input.selectionStart ?? input.value.length;
+      const start = end - m[2].length - 1;
+      const after = input.value.slice(end).replace(/^[\p{L}\p{N}_-]*/u, '');
+      const ins = `#${tag}${after.startsWith(' ') ? '' : ' '}`;
+      input.value = input.value.slice(0, start) + ins + after;
+      input.setSelectionRange(start + ins.length, start + ins.length);
+      update();
+    },
+  });
+  input.addEventListener('input', () => { update(); sug.refresh(); });
   input.addEventListener('keydown', async (e) => {
     if (e.key === 'Escape') { input.value = ''; update(); input.blur(); return; }
     if (e.key !== 'Enter' || e.isComposing) return;
@@ -187,6 +205,63 @@ function flash(id) {
     const el = $(`.task[data-id="${id}"]`, S.root);
     el?.animate([{ background: 'var(--accent-soft)' }, { background: 'transparent' }], { duration: 1100, easing: 'ease-out' });
   });
+}
+
+// ── Tag suggestions ──
+// A small dropdown under `anchor` listing existing tags that match `query()` (null = hidden).
+// ↑/↓ move, Enter/Tab take the highlighted tag (Tab still leaves an empty field), Esc dismisses. Must be created before the
+// input's own keydown handlers so it can claim those keys while open.
+
+function tagSuggest(input, anchor, { query, exclude, pick }) {
+  const box = h('div.menu.tagsug', { role: 'listbox' });
+  let items = [], sel = 0, dismissed = null;
+
+  const onScroll = (e) => { if (!box.contains(e.target)) close(); };
+  const close = () => { box.remove(); items = []; window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', close); };
+  const draw = () => {
+    fill(box, ...items.map((t, i) => h('button', {
+      class: i === sel ? 'on' : '', role: 'option', 'aria-selected': i === sel,
+      onmousedown: (e) => e.preventDefault(),
+      onclick: () => { close(); pick(t.tag); },
+    }, h('span.hash', '#'), t.tag, h('small', t.count))));
+    const r = anchor.getBoundingClientRect();
+    Object.assign(box.style, { left: `${r.left}px`, top: `${r.bottom + 6}px`, minWidth: `${Math.min(r.width, 260)}px` });
+  };
+  const refresh = () => {
+    const q = query();
+    if (q !== dismissed) dismissed = null;
+    if (q == null || dismissed != null || !S || document.activeElement !== input) return close();
+    const ql = q.toLowerCase(), skip = new Set(exclude());
+    // An exact match stays listed (first) so Enter keeps what was typed rather than lengthening it.
+    const pool = S.tags.filter((t) => t.tag === ql || !skip.has(t.tag));
+    const exact = pool.filter((t) => t.tag === ql);
+    const starts = pool.filter((t) => t.tag !== ql && t.tag.startsWith(ql));
+    const within = ql ? pool.filter((t) => !t.tag.startsWith(ql) && t.tag.includes(ql)) : [];
+    items = [...exact, ...starts, ...within].slice(0, 6);
+    if (!items.length || (items.length === 1 && exact.length)) return close();
+    sel = Math.min(sel, items.length - 1);
+    if (!box.isConnected) {
+      sel = 0; document.body.append(box);
+      window.addEventListener('scroll', onScroll, true); window.addEventListener('resize', close);
+    }
+    draw();
+  };
+
+  input.setAttribute('aria-autocomplete', 'list');
+  input.addEventListener('blur', close);
+  input.addEventListener('click', refresh);
+  input.addEventListener('keydown', (e) => {
+    if (!box.isConnected || e.isComposing) return;
+    const claim = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      claim(); sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; draw();
+    } else if (e.key === 'Enter' || (e.key === 'Tab' && query())) {
+      claim(); const t = items[sel]; close(); pick(t.tag);
+    } else if (e.key === 'Escape') {
+      claim(); dismissed = query(); close();
+    }
+  });
+  return { refresh, close };
 }
 
 // ── Rendering ──
@@ -426,13 +501,24 @@ function editorRow(t) {
   const tagIn = h('input', { placeholder: draft.tags.length ? '' : 'Add tags', 'aria-label': 'Add tag' });
   const drawTags = () => fill(tagWrap, ...draft.tags.map((g) => h('span.pchip.tag', `#${g}`,
     h('button', { 'aria-label': `Remove ${g}`, onclick: () => { set('tags', draft.tags.filter((x) => x !== g)); drawTags(); } }, icon('x')))), tagIn);
+  const addTag = (raw) => {
+    const g = raw.trim().replace(/^#/, '').toLowerCase().replace(/\s+/g, '-');
+    if (g && !draft.tags.includes(g)) set('tags', [...draft.tags, g]);
+    tagIn.value = '';
+    drawTags(); tagIn.focus();
+  };
+  const sug = tagSuggest(tagIn, tagWrap, {
+    query: () => tagIn.value.trim().replace(/^#/, ''),
+    exclude: () => draft.tags,
+    pick: (tag) => { addTag(tag); sug.refresh(); },
+  });
+  tagIn.addEventListener('input', () => sug.refresh());
+  tagIn.addEventListener('focus', () => sug.refresh());
   tagIn.addEventListener('keydown', (e) => {
     if (['Enter', ',', ' ', 'Tab'].includes(e.key) && tagIn.value.trim()) {
       e.preventDefault();
-      const g = tagIn.value.trim().replace(/^#/, '').toLowerCase().replace(/\s+/g, '-');
-      if (!draft.tags.includes(g)) set('tags', [...draft.tags, g]);
-      tagIn.value = '';
-      drawTags(); tagIn.focus();
+      addTag(tagIn.value);
+      sug.refresh();
     } else if (e.key === 'Backspace' && !tagIn.value && draft.tags.length) {
       set('tags', draft.tags.slice(0, -1)); drawTags(); tagIn.focus();
     }
