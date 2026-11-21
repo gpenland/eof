@@ -93,7 +93,8 @@ async function route() {
 
 function safeNext() {
   const n = new URLSearchParams(location.search).get('next') || '/tasks';
-  return n.startsWith('/') && !n.startsWith('//') && !n.startsWith('/login') ? n : '/tasks';
+  // Same-origin paths only: browsers read "/\host" like "//host".
+  return n.startsWith('/') && !n.startsWith('//') && !n.includes('\\') && !n.startsWith('/login') ? n : '/tasks';
 }
 function ready() { $('#app').classList.remove('booting'); }
 function teardown() {

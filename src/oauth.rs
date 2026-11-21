@@ -79,7 +79,9 @@ fn valid_redirect(u: &str) -> bool {
 }
 
 pub async fn register(State(st): State<AppState>, headers: HeaderMap, Json(req): Json<RegisterReq>) -> AppResult<Response> {
+    // Per-IP and global caps: X-Forwarded-For can be spoofed, the global one can't.
     security::limit(&st, "oauth-register", &client_ip(&headers, None), 10, 3600)?;
+    security::limit(&st, "oauth-register", "all", 100, 3600)?;
     if req.redirect_uris.is_empty() || req.redirect_uris.len() > 10 || !req.redirect_uris.iter().all(|u| valid_redirect(u)) {
         return Ok(oauth_error(StatusCode::BAD_REQUEST, "invalid_redirect_uri", "redirect_uris must be https or loopback"));
     }
