@@ -16,7 +16,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{api, auth, capture, mcp, oauth, security, state::AppState};
+use crate::{api, auth, capture, mcp, oauth, rest, security, state::AppState};
 
 #[derive(RustEmbed)]
 #[folder = "web/"]
@@ -34,6 +34,8 @@ pub fn router(state: AppState) -> Router {
         .route("/oauth/register", post(oauth::register))
         .route("/oauth/token", post(oauth::token))
         .route("/capture", post(capture::handle))
+        .route("/v1", get(rest::index))
+        .route("/v1/{name}", post(rest::handle))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

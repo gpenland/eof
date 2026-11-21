@@ -1,4 +1,4 @@
-// Settings: appearance, notifications, AI connections, iPhone capture, passkeys, signed-in devices.
+// Settings: appearance, notifications, AI connections, HTTP API, iPhone capture, passkeys, signed-in devices.
 
 import { h, icon, get, post, patch, put, del, toast, fail, sheet, copyText, store, ago, $, fill } from './util.js';
 import { ctx, applyTheme, navigate } from './app.js';
@@ -18,7 +18,7 @@ async function render() {
   if (!S) return;
   const here = await currentSubscription();
   if (!S) return;
-  fill(S.body, appearance(), notifications(pushInfo, here), connections(grants), capture(), passkeys(keys), devices(sessions), account());
+  fill(S.body, appearance(), notifications(pushInfo, here), connections(grants), httpApi(), capture(), passkeys(keys), devices(sessions), account());
   if (location.hash) $(location.hash)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -160,6 +160,23 @@ function capture() {
     h('p.muted', { style: { margin: '10px 0 0', fontSize: '13px' } }, 'Tasks added this way are marked ✦ with the token’s name.'));
 }
 
+// ── HTTP API ──
+
+function httpApi() {
+  const base = `${ctx.boot.origin}/v1`;
+  const example = `curl -X POST ${base}/create_task -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"title": "Pay rent", "due": "fri", "tags": ["home"]}'`;
+  return h('section.card', { id: 'api' },
+    h('h2', 'HTTP API'),
+    h('p.lead', 'Everything an AI can do over MCP is also a plain POST endpoint, for scripts, cron jobs and automations. Send the arguments as JSON (or a form) and get JSON back.'),
+    h('div.copy', h('code', `${base}/<name>`), h('button.btn.sm', { onclick: () => copyText(base, 'API URL copied') }, icon('copy'), 'Copy')),
+    h('ol.steps',
+      h('li', 'Create a token under ', h('b', 'AI connections'), ' and send it as ', h('code', 'Authorization: Bearer <token>'), '.'),
+      h('li', h('code', 'GET /v1'), ' lists every endpoint — ', h('code', 'get_overview'), ', ', h('code', 'list_tasks'), ', ', h('code', 'create_task'), ', ', h('code', 'quick_add'), ', ', h('code', 'publish_issue'), '… — with its arguments.'),
+      h('li', 'Errors come back as ', h('code', '{"error": "…"}'), ' with a 4xx status.')),
+    h('div.field', { style: { marginTop: '12px' } }, h('span', 'Example'),
+      h('div.copy', h('code', example), h('button.btn.sm.icon-only', { 'aria-label': 'Copy example', onclick: () => copyText(example) }, icon('copy')))));
+}
+
 async function shortcutToken() {
   try {
     const r = await post('/api/connections', { name: 'iPhone Shortcut' });
@@ -200,7 +217,7 @@ function newToken() {
             h('div.copy', h('code', r.token), h('button.btn.sm.icon-only', { 'aria-label': 'Copy token', onclick: () => copyText(r.token, 'Token copied') }, icon('copy')))),
           h('div.field', h('span', 'Use with Claude Code'),
             h('div.copy', h('code', cmd), h('button.btn.sm.icon-only', { 'aria-label': 'Copy command', onclick: () => copyText(cmd) }, icon('copy')))),
-          h('p.muted', { style: { margin: 0, fontSize: '13px' } }, 'Any MCP client works: send it as ', h('code', 'Authorization: Bearer …'), ' to the MCP URL.'),
+          h('p.muted', { style: { margin: 0, fontSize: '13px' } }, 'Any MCP client works: send it as ', h('code', 'Authorization: Bearer …'), ' to the MCP URL. The same token works for the HTTP API at ', h('code', `${ctx.boot.origin}/v1`), '.'),
           h('div.actions', h('button.btn.primary', { onclick: () => { close(); render(); } }, 'Done')));
       } catch (e) { fail(e); }
     };

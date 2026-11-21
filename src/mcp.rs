@@ -176,7 +176,7 @@ fn brief(v: impl serde::Serialize) -> Value {
 
 // ── Dispatch ───────────────────────────────────────────────────────────────
 
-async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<Value> {
+pub(crate) async fn call(st: &AppState, actor: &Actor, name: &str, a: &Value) -> AppResult<Value> {
     let db = &st.db;
     Ok(match name {
         "get_overview" => actions::overview(st).await?,
@@ -353,7 +353,7 @@ fn tool(name: &str, title: &str, desc: &str, props: Value, required: &[&str], re
     })
 }
 
-fn tool_list() -> Vec<Value> {
+pub(crate) fn tool_list() -> Vec<Value> {
     let id = json!({ "type": "string", "description": "Task id (uuid) from list_tasks" });
     let date = |d: &str| json!({ "type": "string", "description": d });
     let repeat = json!({ "type": ["string", "null"], "enum": ["daily", "weekdays", "weekly", "monthly", "yearly", null],

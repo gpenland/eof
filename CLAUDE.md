@@ -29,15 +29,16 @@ Config (see `src/config.rs`, `.env.example`): `DATABASE_URL` (required), `PUBLIC
 - `src/domain/` — business rules and SQL (tasks, countdowns, news) plus shared helpers in `domain/mod.rs` (owner timezone, `today()`, loose date parsing like `today`/`fri`, `double_option` for PATCH null-vs-absent).
 - `src/actions.rs` — every state change: call the domain function, then `events::emit` a human-readable message stamped with the `Actor`. Both adapters call these; never mutate from `api.rs` or `mcp.rs` directly.
 - `src/api.rs` — thin JSON adapter for the web UI (`/api/*`), actor is `Actor::you()`.
-- `src/mcp.rs` — hand-rolled MCP server (Streamable HTTP, JSON-RPC, no streaming). `tool_list()` declares schemas and `call()` dispatches to `actions`; the actor is the connected client's name. Adding a feature generally means: domain fn → action → API route → MCP tool (both `tool_list` and `call`) → UI.
+- `src/mcp.rs` — hand-rolled MCP server (Streamable HTTP, JSON-RPC, no streaming). `tool_list()` declares schemas and `call()` dispatches to `actions`; the actor is the connected client's name. Adding a feature generally means: domain fn → action → API route → MCP tool (both `tool_list` and `call`, which also makes it a `/v1` endpoint) → UI.
+- `src/rest.rs` — plain HTTP API for scripts: `POST /v1/{name}` runs the MCP tool of that name (body = its arguments as JSON or a form, reply = its result as JSON, errors `{"error"}` with a 4xx/5xx), and `GET /v1` lists the endpoints with schemas. It reuses `mcp::tool_list`/`mcp::call`, so a new MCP tool is automatically an endpoint too. Same bearer auth as MCP.
 - `src/events.rs` — broadcast channel exposed as SSE at `/api/events`; the UI refreshes and toasts on changes, showing ✦ + the AI's name for non-"you" actors. Created rows also record provenance.
 
 "Today" is always computed in the owner's timezone (stored in the `settings` table, set from the browser), never server UTC.
 
 **Auth (two kinds of caller).**
 - Humans: passkeys only (`auth.rs`, webauthn-rs). The `Owner` extractor validates the session cookie (`__Host-eof` over HTTPS, `eof` on localhost), slides expiry at most every 10 min, and requires an `X-EOF` header on non-GET requests as CSRF defence — the UI's fetch helper in `web/js/util.js` sends it. The `renew_cookie` middleware re-issues the cookie when a session slides.
-- Machines: the `Machine` extractor in `oauth.rs` accepts bearer tokens from the built-in OAuth 2.1 server (DCR, PKCE S256, rotating refresh tokens) or personal API tokens created in Settings. Only SHA-256 hashes of tokens are stored (`security.rs`).
-- `web.rs` splits routes: machine endpoints (`/mcp`, `/oauth/*`, `.well-known`) get permissive CORS; everything else is same-origin. `security::headers` sets a strict CSP (no inline or third-party scripts).
+- Machines (`/mcp`, `/v1/*`, `/capture`): the `Machine` extractor in `oauth.rs` accepts bearer tokens from the built-in OAuth 2.1 server (DCR, PKCE S256, rotating refresh tokens) or personal API tokens created in Settings. Only SHA-256 hashes of tokens are stored (`security.rs`).
+- `web.rs` splits routes: machine endpoints (`/mcp`, `/v1`, `/capture`, `/oauth/*`, `.well-known`) get permissive CORS; everything else is same-origin. `security::headers` sets a strict CSP (no inline or third-party scripts).
 - `state::spawn_janitor` prunes expired sessions, OAuth codes, and tokens hourly.
 
 **Web UI.** Vanilla ES modules, no build step. `web/js/app.js` is the shell (auth gate, client-side router, palette, keyboard shortcuts, SSE feed); each page (`tasks.js`, `countdown.js`, `news.js`, `settings.js`) is a module it mounts. `util.js` has the DOM helper `h()`, fetch wrappers, and toasts. Client routes must also be listed in `APP_ROUTES` in `src/web.rs` so the server returns `index.html` for them.
