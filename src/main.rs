@@ -16,6 +16,7 @@ mod events;
 mod mcp;
 mod oauth;
 mod push;
+mod rest;
 mod security;
 mod state;
 mod web;
