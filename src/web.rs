@@ -3,7 +3,7 @@
 use axum::{
     Router,
     body::Body,
-    extract::Request,
+    extract::{Path, Request, State},
     http::{HeaderValue, Method, StatusCode, header},
     middleware,
     response::{IntoResponse, Response},
@@ -16,7 +16,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{api, auth, capture, mcp, oauth, rest, security, state::AppState};
+use crate::{actions, api, auth, capture, mcp, oauth, rest, security, state::AppState};
 
 #[derive(RustEmbed)]
 #[folder = "web/"]
@@ -57,12 +57,26 @@ pub fn router(state: AppState) -> Router {
         .nest("/auth", auth_routes)
         .nest("/api", api::router())
         .route("/healthz", get(|| async { "ok" }))
+        .route("/mail/read/{token}", get(mail_read))
         .fallback(static_or_app)
         .layer(middleware::from_fn_with_state(state.clone(), auth::renew_cookie))
         .layer(middleware::from_fn_with_state(state.clone(), security::headers))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// The 1×1 image in an emailed edition. Loading it marks that edition read; it always answers
+/// with the image (never an error) so a mail client has nothing to show or retry.
+async fn mail_read(State(st): State<AppState>, Path(token): Path<String>) -> Response {
+    if token.len() <= 64
+        && let Err(e) = actions::read_issue_by_email(&st, &token).await
+    {
+        tracing::warn!("marking an emailed edition read: {e}");
+    }
+    // A transparent 1×1 GIF.
+    const GIF: &[u8] = b"GIF89a\x01\0\x01\0\x80\0\0\0\0\0\0\0\0!\xf9\x04\x01\0\0\0\0,\0\0\0\0\x01\0\x01\0\0\x02\x02D\x01\0;";
+    ([(header::CONTENT_TYPE, "image/gif"), (header::CACHE_CONTROL, "no-store, private")], GIF).into_response()
 }
 
 const APP_ROUTES: [&str; 6] = ["/", "/tasks", "/countdown", "/news", "/settings", "/login"];

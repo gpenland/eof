@@ -203,7 +203,14 @@ async fn auto_email(st: AppState, a: Actor, edition: NaiveDate) {
         Err(e) => return tracing::error!("claiming {edition} for email: {e}"),
     };
     let Some(mailer) = &st.mailer else { return };
-    match mailer.send(&email::issue_message(&i, &st.cfg.origin())).await {
+    let token = match news::read_token(&st.db, edition).await {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = news::release_email(&st.db, edition).await;
+            return tracing::error!("minting the {edition} read token: {e}");
+        }
+    };
+    match mailer.send(&email::issue_message(&i, &st.cfg.origin(), &token)).await {
         Ok(()) => emit(&st, "news", &a, format!("emailed {} to you", quote(&i.title))),
         Err(e) => {
             tracing::warn!("emailing the {edition} edition failed: {e:#}");
@@ -217,8 +224,9 @@ async fn auto_email(st: AppState, a: Actor, edition: NaiveDate) {
 pub async fn email_issue(st: &AppState, a: &Actor, edition: NaiveDate) -> AppResult<news::Issue> {
     let mailer = st.mailer.as_ref().ok_or_else(|| AppError::bad("email isn’t set up (CLOUDFLARE_EMAIL_TOKEN, CLOUDFLARE_ACCOUNT_ID, EMAIL_FROM, EMAIL_TO)"))?;
     let i = news::get(&st.db, &edition.to_string()).await?.issue;
+    let token = news::read_token(&st.db, edition).await?;
     mailer
-        .send(&email::issue_message(&i, &st.cfg.origin()))
+        .send(&email::issue_message(&i, &st.cfg.origin(), &token))
         .await
         .map_err(|e| AppError::bad(format!("couldn’t send: {e}")))?;
     let i = news::mark_emailed(&st.db, edition).await?;
@@ -229,6 +237,14 @@ pub async fn email_issue(st: &AppState, a: &Actor, edition: NaiveDate) -> AppRes
 pub async fn set_issue_read(st: &AppState, a: &Actor, edition: NaiveDate, read: bool) -> AppResult<()> {
     news::set_read(&st.db, edition, read).await?;
     emit(st, "news", a, if read { "marked an issue read" } else { "marked an issue unread" });
+    Ok(())
+}
+
+/// The emailed edition's image was loaded: the owner opened it in their inbox.
+pub async fn read_issue_by_email(st: &AppState, token: &str) -> AppResult<()> {
+    if let Some(i) = news::read_by_token(&st.db, token).await? {
+        emit(st, "news", &Actor::you(), format!("read {} in email", quote(&i.title)));
+    }
     Ok(())
 }
 

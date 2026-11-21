@@ -216,6 +216,25 @@ pub async fn mark_emailed(db: &PgPool, edition: NaiveDate) -> AppResult<Issue> {
         .ok_or(AppError::NotFound("issue"))
 }
 
+/// The edition's email read token, minted on first use and kept, so every copy sent marks it read.
+pub async fn read_token(db: &PgPool, edition: NaiveDate) -> AppResult<String> {
+    sqlx::query_scalar("UPDATE issues SET read_token = coalesce(read_token, $2) WHERE edition = $1 RETURNING read_token")
+        .bind(edition)
+        .bind(crate::security::random_token(18))
+        .fetch_optional(db)
+        .await?
+        .ok_or(AppError::NotFound("issue"))
+}
+
+/// Mark the edition holding `token` read. `Some` only when it was unread until now, so a mail
+/// client fetching the image again doesn't announce it twice.
+pub async fn read_by_token(db: &PgPool, token: &str) -> AppResult<Option<Issue>> {
+    Ok(sqlx::query_as("UPDATE issues SET read_at = now() WHERE read_token = $1 AND read_at IS NULL RETURNING *")
+        .bind(token)
+        .fetch_optional(db)
+        .await?)
+}
+
 pub async fn delete(db: &PgPool, edition: NaiveDate) -> AppResult<Issue> {
     sqlx::query_as("DELETE FROM issues WHERE edition = $1 RETURNING *")
         .bind(edition)
