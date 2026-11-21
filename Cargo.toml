@@ -2,6 +2,9 @@
 name = "eof"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A single-user productivity app (tasks, countdowns, a daily news edition) with passkeys and an MCP server"
+repository = "https://github.com/gpenland/eof"
 
 [dependencies]
 aes-gcm = "0.11.1"
