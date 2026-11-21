@@ -88,9 +88,11 @@ fn escape(s: &str) -> String {
 }
 
 /// The edition as an email: a quiet masthead, the sanitized article, and a link back to the app.
-pub fn issue_message(i: &news::Issue, origin: &str) -> Message {
+/// A 1×1 image keyed by `read_token` marks the edition read when the mail client shows it.
+pub fn issue_message(i: &news::Issue, origin: &str, read_token: &str) -> Message {
     let date = i.edition.format("%A, %B %-d, %Y").to_string();
     let url = format!("{origin}/news/{}", i.edition);
+    let pixel = format!("{origin}/mail/read/{read_token}");
     let body = news::render(&i.markdown);
     let title = escape(&i.title);
     let html = format!(
@@ -105,6 +107,7 @@ pub fn issue_message(i: &news::Issue, origin: &str) -> Message {
     EOF · <a href="{url}" style="color:#77736b;">Read in the app</a>
   </p>
 </div>
+<img src="{pixel}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;">
 </body></html>"#
     );
     let text = format!("{}\n{date}\n\n{}\n\n—\nRead in the app: {url}\n", i.title, i.markdown.trim());
